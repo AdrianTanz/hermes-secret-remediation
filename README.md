@@ -22,7 +22,7 @@ Canonical repo, private until you approve a submission: [AdrianTanz/hermes-secre
 Blocking a turn does not delete the text you typed. Hermes writes it after the hook returns. This plugin then tries to replace credential-shaped text with the same `[secret:kind:fingerprint]` placeholder in three places:
 
 - `$HERMES_HOME/state.db` (mode 0600), `messages.display_metadata` key `withheld_prompt`
-- `$HERMES_HOME/state.db`, `session_admissions.payload_json`, and `payload_digest` when that column exists. The digest is the Hermes v0.23.1 canonical hash of the redacted payload. A later Hermes that changes that hash can refuse a replay. It does not put the old value back.
+- `$HERMES_HOME/state.db`, `session_admissions.payload_json`, and `payload_digest` when that column exists. The digest is the Hermes v0.23.1 canonical hash of the redacted payload. Replaying the original request is refused after the purge. That is expected: the digest no longer matches the text you typed, and the old value is not restored. A later Hermes that changes the hash algorithm can also refuse a replay of the redacted payload.
 - `spawn-ledger.json` (mode 0600) field `argv`, at `$HERMES_HOME/spawn-ledger.json` and, when the home is `<root>/profiles/<name>`, at `<root>/spawn-ledger.json`
 
 The rewrite is one transaction for the database and an exclusive lock plus an atomic replace for the ledger. Other rows, columns, and ledger fields stay. A lock timeout or a corrupt file is appended to the incident log as `purge_failed` and the plaintext can remain. The automatic pass retries for about a second and a half, because Hermes stores `withheld_prompt` after the hook returns. A later flush from Hermes can write the value again after that window.
