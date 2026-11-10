@@ -1,0 +1,14 @@
+name: secret-remediation
+version: 0.1.0
+description: Detect leaked secrets, redact them, and record fingerprint-only incidents with text-only rotation and git-history advice.
+author: Adrian Tanz
+license: MIT
+homepage: https://github.com/AdrianTanz/hermes-secret-remediation
+requires_hermes: ">=0.22.0"
+provides_tools: []
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - transform_tool_result
+  - transform_terminal_output
+  - transform_llm_output
