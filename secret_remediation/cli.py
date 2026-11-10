@@ -35,8 +35,41 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     scan.add_argument("--purge", action="store_true", help="Also count secrets in Hermes state and the spawn ledger.")
     scan.add_argument("--apply", action="store_true", help="With --purge, rewrite those stores. Default is a dry-run.")
 
-    purge_cmd = sub.add_parser("purge", help="Rewrite secrets in Hermes state and the spawn ledger")
+    purge_cmd = sub.add_parser(
+        "purge",
+        help="Rewrite local credential copies. Dry-run unless --apply.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Default dry-run counts secrets in messages.display_metadata.withheld_prompt, "
+            "session_admissions.payload_json, and spawn-ledger.json argv. "
+            "--apply rewrites those three. It does not touch the opt-in targets below.\n\n"
+            "Opt-in, still dry-run unless --apply. Each rewrite is backed up under "
+            "plugin-data/secret-remediation/backups/ first. A failed backup does not "
+            "change the original. Counts only; the secret is not printed.\n"
+            "  --sessions       $HERMES_HOME/sessions/*.jsonl lines\n"
+            "  --messages       messages.content, api_content, tool_calls, and "
+            "display_metadata strings other than withheld_prompt. Resume and /retry "
+            "then see the placeholder, including tool arguments.\n"
+            "  --vacuum         PRAGMA secure_delete on this connection only, then VACUUM "
+            "the live state.db. Refuses if another process has the database open. "
+            "Does not make later Hermes writes use secure_delete.\n"
+            "  --shell-history  ~/.bash_history, ~/.zsh_history, and fish_history. "
+            "A running shell can write its memory back over the file on exit.\n"
+            "  --backups        state-snapshots/**/state.db and "
+            "state.db.pre-update-emergency-*.bak. Zip files in backups/ are counted "
+            "and not rewritten.\n\n"
+            "Not cleared from here: provider logs (the report names the kind and a "
+            "revoke doc when one exists; no provider API is called), arbitrary backups, "
+            "sessions.title, shell scrollback, SSD remnants, and the backup copies this "
+            "command just wrote."
+        ),
+    )
     purge_cmd.add_argument("--apply", action="store_true", help="Rewrite. Without this flag, print counts only.")
+    purge_cmd.add_argument("--sessions", action="store_true", help="Opt in: session JSONL files.")
+    purge_cmd.add_argument("--messages", action="store_true", help="Opt in: message body columns and other display_metadata.")
+    purge_cmd.add_argument("--vacuum", action="store_true", help="Opt in: VACUUM state.db if no other process has it open.")
+    purge_cmd.add_argument("--shell-history", action="store_true", help="Opt in: bash, zsh, and fish history files.")
+    purge_cmd.add_argument("--backups", action="store_true", help="Opt in: known Hermes sqlite snapshots. Zips are left as-is.")
 
     sched = sub.add_parser("schedule", help="Install a zero-model cron scan")
     sched.add_argument("--path", action="append", default=None)
@@ -74,8 +107,16 @@ def _print_roots(home: Path, explicit: list[str] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _print_purge(home: Path, *, apply: bool) -> int:
-    report = purge(home, apply=apply)
+def _print_purge(home: Path, args: argparse.Namespace, *, apply: bool) -> int:
+    report = purge(
+        home,
+        apply=apply,
+        sessions=bool(getattr(args, "sessions", False)),
+        messages=bool(getattr(args, "messages", False)),
+        vacuum=bool(getattr(args, "vacuum", False)),
+        shell_history=bool(getattr(args, "shell_history", False)),
+        backups=bool(getattr(args, "backups", False)),
+    )
     print(report.render(apply=apply), end="")
     return 1 if report.failed else 0
 
@@ -117,13 +158,13 @@ def handle_cli(args: argparse.Namespace) -> int:
         )
         print(text, end="")
         if bool(getattr(args, "purge", False)):
-            return _print_purge(home, apply=bool(getattr(args, "apply", False)))
+            return _print_purge(home, args, apply=bool(getattr(args, "apply", False)))
         if bool(getattr(args, "apply", False)):
             print("secret-remediation: --apply is only valid with --purge\n", end="")
             return 2
         return 0
     if command == "purge":
-        return _print_purge(home, apply=bool(getattr(args, "apply", False)))
+        return _print_purge(home, args, apply=bool(getattr(args, "apply", False)))
     if command == "schedule":
         roots = resolve_roots(
             home,

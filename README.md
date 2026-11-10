@@ -27,26 +27,40 @@ Blocking a turn does not delete the text you typed. Hermes writes it after the h
 
 The rewrite is one transaction for the database and an exclusive lock plus an atomic replace for the ledger. Other rows, columns, and ledger fields stay. A lock timeout or a corrupt file is appended to the incident log as `purge_failed` and the plaintext can remain. The automatic pass retries for about a second and a half, because Hermes stores `withheld_prompt` after the hook returns. A later flush from Hermes can write the value again after that window.
 
-Manual pass. The default prints counts only:
+Manual pass. The default prints counts only, and `--apply` rewrites only the three stores above:
 
 ```bash
 hermes secret-remediation purge
 hermes secret-remediation purge --apply
-hermes secret-remediation scan --purge
-hermes secret-remediation scan --purge --apply
 ```
 
-A successful purge does not remove:
+These targets are opt-in. Without `--apply` they print counts only. With `--apply` each file is copied to `$HERMES_HOME/plugin-data/secret-remediation/backups/` before it is rewritten. If that copy fails, the original is left in place and the incident log gets `purge_failed`. The report never prints the secret.
 
-- Provider logs, or any copy that already reached a model, a fork, or a sent chat
-- Shell history and terminal scrollback
-- Backups and snapshots (`state-snapshots/`, `hermes backup`, `state.db` copies, files you copied)
-- SQLite free-page slack, and `state.db-wal` when a checkpoint cannot run. This plugin does not `VACUUM` a live database
-- `$HERMES_HOME/sessions/` JSONL files
-- `messages.content`, `messages.api_content`, `messages.tool_calls`, session titles, and any `display_metadata` key other than `withheld_prompt`
+```bash
+hermes secret-remediation purge --sessions
+hermes secret-remediation purge --messages --apply
+hermes secret-remediation purge --vacuum --apply
+hermes secret-remediation purge --shell-history --apply
+hermes secret-remediation purge --backups --apply
+```
+
+- `--sessions` rewrites `$HERMES_HOME/sessions/**/*.jsonl` line by line. A secret split across two lines is not matched.
+- `--messages` rewrites `messages.content`, `messages.api_content`, `messages.tool_calls`, and `display_metadata` strings other than `withheld_prompt` (that key is the automatic path). Resume, compaction, and `/retry` then see the placeholder, including inside tool arguments, so a replay does not send the secret and a retried tool call does not receive the old argument. If Hermes's FTS triggers are installed they update with the row and `transcript_revision` bumps. `sessions.title` is not rewritten.
+- `--vacuum` sets `PRAGMA secure_delete=ON` on this connection only and runs `VACUUM` on the live `state.db`. It refuses when another process has the database or its WAL open, and when `/proc` cannot be checked. Hermes's later writes do not inherit `secure_delete`. The rebuilt file does not contain the old free pages. The backup copy still does. Disk remnants are out of scope.
+- `--shell-history` rewrites `~/.bash_history`, `~/.zsh_history`, and `~/.local/share/fish/fish_history` where a detector matches. A running shell keeps history in memory and can write that memory back over the file when it exits. Close those shells, or clear the in-memory history, after the scrub.
+- `--backups` rewrites sqlite copies Hermes v0.23.1 actually writes: `state-snapshots/**/state.db` and `state.db.pre-update-emergency-*.bak`, including message text and admission payloads. Zip archives in `backups/` (`pre-update-*.zip`, `pre-migration-*.zip`) are counted and not rewritten. Repacking them can produce an archive Hermes will not restore. Any other backup, including copies you made yourself, is out of scope.
+
+Provider logs cannot be cleared from this client. When a purge finds a credential it prints `rotate_or_revoke=<kind>` and a documentation link when one exists. It does not call a provider API.
+
+Still not cleared:
+
+- Provider-side logs, and any copy that already reached a model, a fork, or a sent chat
+- Arbitrary backups, the zip archives above, and the backup copies this command writes
+- `sessions.title`, terminal scrollback, and a secret split across JSONL lines
+- SQLite free pages unless `--vacuum` ran, and not the bytes in the backup or on the SSD
 - Incident lines, which keep a fingerprint and the last 4 characters
 
-Rotate the credential. Replacing or deleting a local file does not un-leak a value that already left the machine. After you rotate, delete shell history and any backup or session JSONL that still has the old value. If you need the free pages gone, stop Hermes and `VACUUM` `state.db` yourself. This plugin will not do that.
+Rotate the credential. Replacing a local file does not un-leak a value that already left the machine. Delete the backup copy after you have checked the rewrite.
 
 Detection this version does not do:
 

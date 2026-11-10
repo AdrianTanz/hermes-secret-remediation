@@ -38,7 +38,14 @@ Session history, logs, and the database are read in 64KiB windows. A match is ha
   - `$HERMES_HOME/state.db` `session_admissions.payload_json`, and `payload_digest` when that column exists (Hermes v0.23.1 canonical hash of the redacted payload)
   - `spawn-ledger.json` field `argv`, at `$HERMES_HOME/spawn-ledger.json` and, when the home is `<root>/profiles/<name>`, at `<root>/spawn-ledger.json`
 - `purge` and `scan --purge` without `--apply` only print counts. They do not write those stores.
-- That purge does not clear provider logs, backups or snapshots, shell history, `$HERMES_HOME/sessions/` JSONL, `messages.content`, `messages.api_content`, `messages.tool_calls`, other `display_metadata` keys, or SQLite free-page slack. It does not `VACUUM` `state.db`. A failed rewrite is logged as `purge_failed` and the plaintext can remain. Hermes can write `withheld_prompt` again after the short automatic retry.
+- Opt-in flags, dry-run unless `--apply`, each file backed up under `plugin-data/secret-remediation/backups/` before a rewrite. A failed backup leaves the original and logs `purge_failed`. The output is counts and kind names, not the secret.
+  - `--sessions` rewrites `$HERMES_HOME/sessions/**/*.jsonl` line by line. A value split across lines stays.
+  - `--messages` rewrites `messages.content`, `api_content`, `tool_calls`, and `display_metadata` strings other than `withheld_prompt`. Resume and `/retry` then see the placeholder, including tool arguments. `sessions.title` is not rewritten.
+  - `--vacuum` sets `PRAGMA secure_delete` for that connection only and runs `VACUUM` on the live `state.db`. It refuses if another process has the database open or `/proc` cannot be checked. Later Hermes writes do not inherit `secure_delete`. The backup still holds the old pages.
+  - `--shell-history` rewrites `~/.bash_history`, `~/.zsh_history`, and fish history. A running shell can write its in-memory history back over the file on exit.
+  - `--backups` rewrites `state-snapshots/**/state.db` and `state.db.pre-update-emergency-*.bak`. Zip files in `backups/` are counted and not rewritten. Other backups are out of scope.
+- Provider logs are not cleared and no provider API is called. The report prints `rotate_or_revoke=<kind>` plus a documentation link when one exists.
+- The default purge still does not clear `sessions.title`, zip archives, arbitrary backups, terminal scrollback, SSD remnants, or incident fingerprints. A failed rewrite is logged as `purge_failed` and the plaintext can remain. Hermes can write `withheld_prompt` again after the short automatic retry.
 - Writes `$HERMES_HOME/plugin-data/secret-remediation/incidents.jsonl` via `plugin_data_dir("secret-remediation")`, plus `scan_paths.json` (mode 0600).
 - Writes `$HERMES_HOME/scripts/secret-remediation-scan.sh` (mode 0700).
 - Spawns `hermes cron create … --no-agent --script …` when scheduling. If `hermes` is not on `PATH`, the wrapper is still written and the command is printed.

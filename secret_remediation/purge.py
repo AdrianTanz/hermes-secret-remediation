@@ -35,6 +35,47 @@ RETRY_DELAYS = (0.0, 0.05, 0.15, 0.40, 0.90)
 _pending_lock = threading.Lock()
 _pending: list[threading.Thread] = []
 
+# Public docs only. No provider API is called. A missing URL means no stable deletion doc.
+_ROTATE_URLS = {
+    "github_pat": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation",
+    "github_fine_grained": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation",
+    "github_oauth": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation",
+    "github_user_to_server": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation",
+    "github_server": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation",
+    "github_refresh": "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/token-expiration-and-revocation",
+    "openai": "https://platform.openai.com/docs/guides/your-data",
+    "openai_project": "https://platform.openai.com/docs/guides/your-data",
+    "anthropic": "https://docs.anthropic.com/en/docs/build-with-claude/api-and-data-retention",
+    "aws_access_key_id": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html",
+    "aws_temp_access_key_id": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html",
+    "aws_secret_access_key": "https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html",
+    "google_api": "https://cloud.google.com/docs/authentication/api-keys",
+    "slack_token": "https://api.slack.com/authentication/token-types",
+    "slack_webhook": "https://api.slack.com/authentication/token-types",
+    "stripe_live": "https://docs.stripe.com/keys",
+    "stripe_restricted": "https://docs.stripe.com/keys",
+    "stripe_test": "https://docs.stripe.com/keys",
+    "gitlab_pat": "https://docs.gitlab.com/user/profile/personal_access_tokens/",
+    "huggingface": "https://huggingface.co/docs/hub/en/security-tokens",
+    "npm": "https://docs.npmjs.com/about-access-tokens",
+    "pypi": "https://pypi.org/help/#apitoken",
+    "sendgrid": "https://www.twilio.com/docs/sendgrid/ui/account-and-settings/api-keys",
+}
+
+
+def rotate_lines(kinds: set[str]) -> list[str]:
+    """Provider-log guidance. The kind name only. Never a secret value."""
+    if not kinds:
+        return []
+    lines = ["provider_logs=not_cleared"]
+    for kind in sorted(kinds):
+        url = _ROTATE_URLS.get(kind, "")
+        text = f"rotate_or_revoke={kind} revoke or rotate this key now"
+        if url:
+            text = f"{text} {url}"
+        lines.append(text)
+    return lines
+
 
 @dataclass
 class PurgeReport:
@@ -46,6 +87,8 @@ class PurgeReport:
     failure: str = ""
     applied: bool = False
     codes: list[str] = field(default_factory=list)
+    kinds: set[str] = field(default_factory=set)
+    extra_lines: list[str] = field(default_factory=list)
 
     @property
     def failed(self) -> bool:
@@ -75,6 +118,8 @@ class PurgeReport:
         ]
         if self.failure:
             lines.append(f"failure={self.failure}")
+        lines.extend(self.extra_lines)
+        lines.extend(rotate_lines(self.kinds))
         return "\n".join(lines) + "\n"
 
 
@@ -114,7 +159,17 @@ def state_db_path(home: Path | None = None) -> Path:
     return (home or hermes_home()).resolve() / "state.db"
 
 
-def purge(home: Path | None = None, *, apply: bool = False, timeout: float = 5.0) -> PurgeReport:
+def purge(
+    home: Path | None = None,
+    *,
+    apply: bool = False,
+    timeout: float = 5.0,
+    sessions: bool = False,
+    messages: bool = False,
+    vacuum: bool = False,
+    shell_history: bool = False,
+    backups: bool = False,
+) -> PurgeReport:
     """Count credential rows. ``apply=True`` rewrites them.
 
     A store with nothing to change is not opened for writing, so a no-op does
@@ -122,17 +177,36 @@ def purge(home: Path | None = None, *, apply: bool = False, timeout: float = 5.0
     """
     root = (home or hermes_home()).resolve()
     preview = _run(root, timeout=timeout if not apply else min(timeout, 1.0), write=False)
+    opted = any((sessions, messages, vacuum, shell_history, backups))
     if not apply:
+        if opted:
+            from secret_remediation.purge_extra import scrub_opt_in
+
+            scrub_opt_in(
+                root, preview, apply=False, timeout=timeout,
+                sessions=sessions, messages=messages, vacuum=vacuum,
+                shell_history=shell_history, backups=backups,
+            )
         return preview
     if preview.replacements == 0 and not (preview.failed and _retryable(preview)):
-        return preview
-    return _run(
-        root,
-        timeout=timeout,
-        write=True,
-        database=_needs_database(preview),
-        ledgers=_needs_ledger(preview),
-    )
+        report = preview
+    else:
+        report = _run(
+            root,
+            timeout=timeout,
+            write=True,
+            database=_needs_database(preview),
+            ledgers=_needs_ledger(preview),
+        )
+    if opted:
+        from secret_remediation.purge_extra import scrub_opt_in
+
+        scrub_opt_in(
+            root, report, apply=True, timeout=timeout,
+            sessions=sessions, messages=messages, vacuum=vacuum,
+            shell_history=shell_history, backups=backups,
+        )
+    return report
 
 
 def schedule_purge(home: Path | None = None) -> None:
@@ -312,6 +386,7 @@ def _scrub_messages(conn: sqlite3.Connection, report: PurgeReport, *, write: boo
             continue
         report.withheld_rows += 1
         report.replacements += len(hits)
+        report.kinds.update(hit.kind for hit in hits)
         if write:
             changed = conn.execute(
                 "UPDATE messages SET display_metadata = ? WHERE rowid = ? AND display_metadata = ?",
@@ -358,6 +433,7 @@ def _scrub_admissions(conn: sqlite3.Connection, report: PurgeReport, *, write: b
                 digest = None
         report.admission_rows += 1
         report.replacements += len(hits)
+        report.kinds.update(hit.kind for hit in hits)
         if not write:
             continue
         if digest is None:
@@ -427,6 +503,7 @@ def _redact_ledger_entries(entries: list, report: PurgeReport) -> bool:
             entry["argv"] = masked
             report.ledger_entries += 1
             report.replacements += len(hits)
+            report.kinds.update(hit.kind for hit in hits)
             changed = True
             continue
         if isinstance(argv, list):
@@ -439,7 +516,9 @@ def _redact_ledger_entries(entries: list, report: PurgeReport) -> bool:
                     continue
                 masked, hits = redact_text(part)
                 hits_here += len(hits)
-                list_changed = list_changed or bool(hits)
+                if hits:
+                    list_changed = True
+                    report.kinds.update(hit.kind for hit in hits)
                 new_argv.append(masked if hits else part)
             if list_changed:
                 entry["argv"] = new_argv
