@@ -1,0 +1,26 @@
+name: secret-remediation
+version: 0.1.0
+description: After a credential has already leaked into Hermes or git, contain it and guide rotation. Fingerprints only. Not another masking pack.
+author: Adrian Tanz
+license: MIT
+homepage: https://github.com/AdrianTanz/hermes-secret-remediation
+requires_hermes: ">=0.22.0"
+provides_tools: []
+provides_hooks:
+  - pre_llm_call
+  - pre_tool_call
+  - transform_tool_result
+  - transform_terminal_output
+  - transform_llm_output
+config_schema:
+  scan_paths:
+    type: array
+    description: "When this key is set, it replaces the default scan list. An empty list scans nowhere and does not fall back to the defaults."
+  include_logs:
+    type: boolean
+    default: true
+    description: "Include $HERMES_HOME/logs unless the operator passes --no-logs."
+  include_sessions:
+    type: boolean
+    default: true
+    description: "Include session files and state.db unless the operator passes --no-sessions."

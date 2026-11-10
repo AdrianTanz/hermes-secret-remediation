@@ -1,0 +1,12 @@
+[project]
+name = "hermes-secret-remediation"
+version = "0.1.0"
+description = "Hermes Agent plugin that redacts leaked secrets and records fingerprint-only incidents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Adrian Tanz" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
