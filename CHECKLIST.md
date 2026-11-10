@@ -14,7 +14,7 @@ Operator checks for this plugin. Paths below are Hermes homes, not a build machi
 ## Tests
 
 - [x] `python3 -m pytest`
-- [ ] `hermes plugins validate . --install-deps` and `hermes plugins doctor . --ci` on a local Hermes 0.22 or newer
+- [x] `hermes plugins validate . --install-deps` and `hermes plugins doctor . --ci` on Hermes v0.23.1 (`3b421578`)
 
 ## Not in this tree
 
