@@ -3,18 +3,32 @@
 from __future__ import annotations
 
 BOUNDARY = (
+    "Masking does not revoke the credential. Rotate first. "
     "This plugin does not call a revoke API, does not rewrite git history, "
-    "and does not push. The steps below are for you to run, or not."
+    "and does not push. The commands below are copy-paste text for you. "
+    "The plugin does not run them."
 )
 
 GIT_HISTORY = """\
 Git history
-If the credential was committed, rotating it comes first. Rewriting history does not un-leak a value that was already cloned or fetched.
-After the issuer has revoked it, clean the history yourself with a tool you choose. git-filter-repo and BFG Repo-Cleaner are the usual ones. Read their docs and decide the rewrite on a fresh clone.
-A rewrite changes every commit hash after the bad commit. Anyone else with the repo has to re-clone or reset onto the new history. Agree that before the remote is updated.
-Publishing a rewritten branch replaces remote history. This plugin will not do that step.
-GitHub secret scanning and push protection, or the equivalent on your host, reject the old value if someone pushes it again. Turn that on after rotation.
-Forks, CI caches, chat logs and Hermes transcripts are outside the git objects. Treat those as leaked too."""
+Rotate first. A rewrite does not un-leak a value that was already fetched, forked, or sent to a model.
+Work on a mirror clone, not the checkout you use every day. Example, which this plugin will not run:
+
+    git clone --mirror <remote-url> /tmp/cleanup.git
+    printf '%s==>REDACTED\\n' '<the-old-value>' > /tmp/replacements.txt
+    git filter-repo --replace-text /tmp/replacements.txt
+
+BFG on that same mirror, also not run by this plugin:
+
+    java -jar bfg.jar --replace-text /tmp/replacements.txt /tmp/cleanup.git
+
+Take a backup bundle before you start:
+
+    git -C /path/to/repo bundle create /tmp/before-cleanup.bundle --all
+
+A rewrite changes commit hashes. Remotes and forks keep the old objects until they expire. Publishing the rewritten history is a coordinated human decision. This plugin will not do it.
+After rotation, turn on the host's secret scanning so the old value is rejected if someone sends it again.
+CI caches, chat logs and Hermes transcripts are outside the git objects. Treat those as leaked too."""
 
 _ROTATION: dict[str, str] = {
     "github_pat": "GitHub: Settings, Developer settings, Personal access tokens. Revoke the classic token and issue a replacement only after the old one is dead. Update CI and local secret stores. Do not paste the new token into chat.",

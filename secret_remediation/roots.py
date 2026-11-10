@@ -127,20 +127,57 @@ def _role_for(path: Path, home: Path) -> str:
     return "custom"
 
 
+def _custom(item: str, home: Path) -> ScanRoot:
+    target = Path(item).expanduser()
+    resolved = target.resolve() if target.exists() else target
+    return ScanRoot(resolved, _role_for(target, home))
+
+
+def _drop(roots: list[ScanRoot], *, no_logs: bool, no_sessions: bool) -> list[ScanRoot]:
+    kept: list[ScanRoot] = []
+    for root in roots:
+        if no_logs and root.role == "logs":
+            continue
+        if no_sessions and root.role in {"sessions", "state_db", "state_wal"}:
+            continue
+        kept.append(root)
+    return kept
+
+
 def resolve_roots(
     home: Path,
-    explicit: list[str] | None = None,
+    extra: list[str] | None = None,
     *,
+    only: list[str] | None = None,
+    no_logs: bool = False,
+    no_sessions: bool = False,
     workspace: Path | None = None,
 ) -> list[ScanRoot]:
-    """``--path`` wins, then the saved list, then Hermes's default roots."""
-    if explicit:
-        roots: list[ScanRoot] = []
-        for item in explicit:
-            target = Path(item).expanduser()
-            roots.append(ScanRoot(target.resolve() if target.exists() else target, _role_for(target, home)))
-        return roots
-    saved = load_configured_roots(home)
-    if saved is not None:
-        return saved
-    return default_scan_roots(home, workspace=workspace)
+    """Resolve the scan list.
+
+    An explicit ``only`` list, a ``scan_paths`` setting, or a saved list is
+    used as-is, including when it is empty. Defaults are not added back.
+    ``--path`` values are extra locations on top of that list.
+    """
+    from secret_remediation.settings import load_settings
+
+    settings = load_settings(home)
+    if isinstance(settings.get("include_logs"), bool):
+        no_logs = no_logs or settings["include_logs"] is False
+    if isinstance(settings.get("include_sessions"), bool):
+        no_sessions = no_sessions or settings["include_sessions"] is False
+
+    if only is not None:
+        roots = [_custom(item, home) for item in only]
+    elif "scan_paths" in settings:
+        roots = [_custom(item, home) for item in settings["scan_paths"]]
+    else:
+        saved = load_configured_roots(home)
+        if saved is not None:
+            roots = saved
+        else:
+            roots = default_scan_roots(home, workspace=workspace)
+    roots = _drop(roots, no_logs=no_logs, no_sessions=no_sessions)
+    if extra:
+        roots.extend(_custom(item, home) for item in extra)
+    return roots

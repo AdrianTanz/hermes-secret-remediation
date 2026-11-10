@@ -40,12 +40,13 @@ SKIP_DIRS = frozenset({
 
 
 class Finding:
-    __slots__ = ("kind", "fingerprint", "length", "source", "location")
+    __slots__ = ("kind", "fingerprint", "length", "last4", "source", "location")
 
     def __init__(self, hit: PublicHit, source: str, location: str) -> None:
         self.kind = hit.kind
         self.fingerprint = hit.fingerprint
         self.length = hit.length
+        self.last4 = hit.last4
         self.source = source
         self.location = location
 
@@ -53,6 +54,7 @@ class Finding:
         return {
             "kind": self.kind,
             "fingerprint": self.fingerprint,
+            "last4": self.last4,
             "length": self.length,
             "source": self.source,
             "location": self.location,
@@ -97,8 +99,21 @@ def _findings_from_hits(
     return [Finding(hit, source, f"{location}:{line}") for hit, line in pairs]
 
 
+def _in_plugin_data(path: Path, home: Path | None) -> bool:
+    if home is None:
+        return False
+    from secret_remediation.paths import plugin_data_dir
+
+    data = plugin_data_dir(home).resolve()
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return True
+    return resolved == data or data in resolved.parents
+
+
 def scan_file(path: Path, root: Path, *, unbounded: bool, home: Path | None = None) -> list[Finding]:
-    if _hermes_credential_file(path, home):
+    if _hermes_credential_file(path, home) or _in_plugin_data(path, home):
         return []
     try:
         if not path.is_file():
@@ -147,6 +162,40 @@ def _git(root: Path, *args: str) -> str | None:
 def _is_git(root: Path) -> bool:
     completed = run_allowed(["git", "-C", str(root), "rev-parse", "--is-inside-work-tree"])
     return completed.returncode == 0 and completed.stdout.strip() == "true"
+
+
+def scan_git_diff(root: Path) -> list[Finding]:
+    """Stream ``git diff`` and the staged diff. Read-only."""
+    root = root.resolve()
+    if not root.is_dir() or not _is_git(root):
+        return []
+    findings: list[Finding] = []
+    for args in (
+        ["diff", "--no-ext-diff", "-U3"],
+        ["diff", "--cached", "--no-ext-diff", "-U3"],
+    ):
+        try:
+            pairs = scan_byte_stream(stream_allowed(["git", "-C", str(root), *args]))
+        except OSError:
+            continue
+        findings.extend(_findings_from_hits(pairs, source="git-diff", location=root.name))
+    return findings
+
+
+def scan_git_show(root: Path, rev: str) -> list[Finding]:
+    """Stream ``git show <rev>`` when the user points at a revision."""
+    if not rev or rev.startswith("-") or any(char.isspace() for char in rev):
+        return []
+    root = root.resolve()
+    if not root.is_dir() or not _is_git(root):
+        return []
+    try:
+        pairs = scan_byte_stream(
+            stream_allowed(["git", "-C", str(root), "show", "--no-ext-diff", rev])
+        )
+    except OSError:
+        return []
+    return _findings_from_hits(pairs, source="git-show", location=rev)
 
 
 def scan_git_history(root: Path, *, max_commits: int = MAX_COMMITS) -> list[Finding]:
@@ -198,36 +247,54 @@ def scan_roots(
     roots: list[ScanRoot],
     *,
     git_history: bool = False,
+    git_diff: bool = False,
+    git_show: str | None = None,
     home: Path | None = None,
 ) -> list[Finding]:
     findings: list[Finding] = []
     seen: set[tuple[str, str, str]] = set()
-    for root in roots:
-        for item in scan_root(root, git_history=git_history, home=home):
+
+    def add(batch: list[Finding]) -> None:
+        for item in batch:
             key = (item.fingerprint, item.source, item.location)
             if key in seen:
                 continue
             seen.add(key)
             findings.append(item)
+
+    for root in roots:
+        add(scan_root(root, git_history=git_history, home=home))
+        if root.path.is_dir() and (git_diff or git_show):
+            if git_diff:
+                add(scan_git_diff(root.path))
+            if git_show:
+                add(scan_git_show(root.path, git_show))
     return findings
 
 
 def record_findings(findings: list[Finding], home: Path | None = None) -> None:
     for item in findings:
-        hit = PublicHit(item.kind, item.fingerprint, item.length, 0, 0)
+        hit = PublicHit(item.kind, item.fingerprint, item.length, item.last4, 0, 0)
         record_hits([hit], source=item.source, location=item.location, home=home)
 
 
-def format_report(findings: list[Finding], *, heading: str) -> str:
+def format_report(findings: list[Finding], *, heading: str, quiet: bool = False) -> str:
     if not findings:
-        return f"{heading}: no credential material found.\n"
+        if quiet:
+            return ""
+        return (
+            f"{heading}: no credential material found.\n"
+            "Masking does not revoke a credential. Rotate first if one has already leaked.\n"
+        )
     lines = [
+        "Masking does not revoke a credential. If it already reached a model, a pushed git object, or a sent chat, rotate it first.",
         f"{heading}: {len(findings)} finding(s). Values are not shown.",
         "",
     ]
     for item in findings:
+        ending = f"  ending=…{item.last4}" if item.last4 else ""
         lines.append(
-            f"{item.kind}  fp={item.fingerprint}  len={item.length}  "
+            f"{item.kind}  fp={item.fingerprint}{ending}  len={item.length}  "
             f"{item.source}  {item.location}"
         )
     lines.append("")
@@ -301,7 +368,7 @@ def scheduled_main() -> int:
     findings = scan_roots(roots, git_history=bool(config.get("git_history", False)), home=home)
     fresh = [item for item in findings if item.fingerprint not in known_fingerprints(home)]
     record_findings(findings, home)
-    if not fresh:
-        return 0
-    print(format_report(fresh, heading="secret-remediation scheduled scan"), end="")
+    text = format_report(fresh, heading="secret-remediation scheduled scan", quiet=True)
+    if text:
+        print(text, end="")
     return 0

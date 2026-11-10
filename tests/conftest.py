@@ -33,3 +33,8 @@ def no_secret_in_output(capsys):
     assert_clean(captured.out)
     assert_clean(captured.err)
     assert_clean("\n".join(records))
+    from secret_remediation.paths import incidents_path
+
+    path = incidents_path()
+    if path.is_file():
+        assert_clean(path.read_text(encoding="utf-8"))

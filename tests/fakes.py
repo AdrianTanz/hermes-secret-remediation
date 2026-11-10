@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-GITHUB = "ghp_" + "A" * 36
-GITHUB_FINE = "github_pat_" + "b" * 22
+GITHUB = "ghp_FAKESECRET_testonly_aaaabbbbccccdddd"
+GITHUB_FINE = "github_pat_" + "FAKE" * 8
 AWS = "AKIA" + "FAKEFAKEFAKEFAKE"
-ANTHROPIC = "sk-ant-api03-" + "c" * 24
-OPENAI = "sk-" + "d" * 32
-SLACK = "xoxb-" + "1" * 12 + "-" + "e" * 12
+ANTHROPIC = "sk-ant-FAKE_do_not_use_" + "c" * 16
+OPENAI = "sk-test_fake_do_not_use_AAAABBBBCCCCDDDD"
+SLACK = "xoxb-FAKE-not-a-real-token"
 PEM_BODY = "M" * 48
 PEM = (
     "-----BEGIN PRIVATE KEY-----\n"

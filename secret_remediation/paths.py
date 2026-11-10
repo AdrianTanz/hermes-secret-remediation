@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 from pathlib import Path
 
 PLUGIN_ID = "secret-remediation"
-SCRIPT_NAME = "secret-remediation-scan.py"
+SCRIPT_NAME = "secret-remediation-scan.sh"
 JOB_NAME = "secret-remediation-scan"
+DEFAULT_SCHEDULE = "0 3 * * *"
 
 
 def hermes_home() -> Path:
@@ -20,10 +20,21 @@ def hermes_home() -> Path:
 
 
 def plugin_data_dir(home: Path | None = None) -> Path:
-    """Same directory Hermes ``PluginState`` uses for this plugin id."""
-    root = home or hermes_home()
-    digest = hashlib.sha256(PLUGIN_ID.encode("utf-8")).hexdigest()[:8]
-    return root / "plugin-data" / f"agent-plugin-{PLUGIN_ID}-{digest}"
+    """``plugins.plugin_storage.plugin_data_dir`` — ``<HERMES_HOME>/plugin-data/<name>/``.
+
+    That directory survives ``hermes plugins update``. When this process is not
+    a Hermes install, the same path is created directly.
+    """
+    if home is None:
+        try:
+            from plugins.plugin_storage import plugin_data_dir as official
+
+            return official(PLUGIN_ID)
+        except Exception:
+            pass
+    root = (home or hermes_home()) / "plugin-data" / PLUGIN_ID
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def incidents_path(home: Path | None = None) -> Path:

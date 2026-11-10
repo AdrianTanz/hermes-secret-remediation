@@ -19,6 +19,7 @@ _PUBLIC_KEYS = (
     "ts",
     "kind",
     "fingerprint",
+    "last4",
     "length",
     "source",
     "location",
@@ -42,6 +43,7 @@ def make_incident(
         "ts": _now(),
         "kind": hit.kind,
         "fingerprint": hit.fingerprint,
+        "last4": hit.last4,
         "length": hit.length,
         "source": source,
         "location": location,
@@ -122,6 +124,6 @@ def known_fingerprints(home: Path | None = None) -> set[str]:
 def format_incident(row: dict[str, Any]) -> str:
     return (
         f"{row.get('id', '')}  {row.get('ts', '')}  {row.get('kind', '')}  "
-        f"fp={row.get('fingerprint', '')}  len={row.get('length', '')}  "
+        f"fp={row.get('fingerprint', '')}  ending=…{row.get('last4', '')}  len={row.get('length', '')}  "
         f"{row.get('source', '')}  {row.get('location', '')}"
     )

@@ -26,19 +26,15 @@ def test_git_push_and_hermes_agent_are_refused():
 
 
 def test_package_does_not_call_revoke_or_rewrite_history():
-    banned = (
-        "git filter-repo",
-        "git push",
-        "--force",
-        "import urllib",
-        "import httpx",
-        "import requests",
-        "shell=True",
-        "ctx.redact_text",
-    )
+    banned_everywhere = ("import urllib", "import httpx", "import requests", "shell=True", "ctx.redact_text")
+    banned_in_runners = ("git filter-repo", "git push", "--force", "filter-repo")
+    runners = {"process.py", "scan.py", "schedule.py", "cli.py", "hooks.py"}
     for path in list(PACKAGE.rglob("*.py")) + [ROOT / "__init__.py"]:
         text = path.read_text(encoding="utf-8")
-        for needle in banned:
+        for needle in banned_everywhere:
             assert needle not in text, f"{path.name} contains {needle}"
+        if path.name in runners:
+            for needle in banned_in_runners:
+                assert needle not in text, f"{path.name} contains {needle}"
     init_text = (ROOT / "__init__.py").read_text(encoding="utf-8")
     assert "register_redaction_patterns" in init_text

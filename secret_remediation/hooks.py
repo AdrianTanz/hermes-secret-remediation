@@ -54,15 +54,27 @@ def _record(hits: list[PublicHit], source: str, location: str, session_id: str) 
         record_hits(hits, source=source, location=location, session_id=session_id)
 
 
-def _summarize(hits: list[PublicHit]) -> str:
+def _line(hit: PublicHit, where: str) -> str:
+    ending = f" ending …{hit.last4}" if hit.last4 else ""
+    return (
+        f"Blocked: {hit.kind} fingerprint {hit.fingerprint}{ending} "
+        f"found in {where}."
+    )
+
+
+def _summarize(hits: list[PublicHit], where: str) -> str:
     lines = [
-        "secret-remediation found credential material. The value is not shown.",
+        "Masking does not revoke a credential. If it already reached a model, "
+        "a pushed git object, or a sent chat, rotate it first.",
     ]
-    for hit in hits:
-        lines.append(f"- {hit.kind} fingerprint {hit.fingerprint} ({hit.length} chars)")
+    lines.extend(_line(hit, where) for hit in hits)
     lines.append(
-        "Rotate it at the issuer. If it was committed, clean the git history yourself. "
-        "This plugin will not revoke it, rewrite history, or push. "
+        "I have not sent this turn to the model."
+        if where == "this message"
+        else "The tool was not run."
+    )
+    lines.append(
+        "This plugin will not revoke it, rewrite git history, or push. "
         "Details: /secret-incident"
     )
     return "\n".join(lines)
@@ -78,7 +90,7 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         if not hits:
             return None
         _record(hits, "pre_llm_call", "user_message", _session(kwargs))
-        return {"action": "block", "message": _summarize(hits)}
+        return {"action": "block", "message": _summarize(hits, "this message")}
     except Exception:
         return {"action": "block", "message": FAIL_CLOSED}
 
@@ -95,7 +107,7 @@ def on_pre_tool_call(**kwargs: Any) -> dict[str, str] | None:
             return None
         location = _safe_location(f"tool:{tool_name}")
         _record(hits, "pre_tool_call", location, _session(kwargs))
-        return {"action": "block", "message": _summarize(hits)}
+        return {"action": "block", "message": _summarize(hits, "the tool arguments")}
     except Exception:
         return {"action": "block", "message": FAIL_CLOSED}
 

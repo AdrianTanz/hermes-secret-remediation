@@ -1,84 +1,88 @@
 # Checklist
 
-The task note `05_Systems/Tasks/2026-11-10-1441-hermes-secret-remediation-plugin.md` at commit `01e39471` in `AdrianTanz/SecondBrain` was not readable from this environment (private repository, `gh` unauthenticated, raw URL 404). The boxes below follow the build instructions and Adrian's later answers. They are not a verbatim copy of that note.
+Checked against the task note `05_Systems/Tasks/2026-11-10-1441-hermes-secret-remediation-plugin.md` (uploaded copy of that note, plus `04_Projects/hermes-hackathon-secret-remediation.md`). Section numbers below are that note's sections.
 
-## 1. Plugin shape
+## Section 1 — Problem
 
-- [x] `plugin.yaml` plus `register(ctx)`
-- [x] Catalogue id and title: `secret-remediation`
-- [x] Author: Adrian Tanz, solo
+- [x] Written for a Hermes operator whose credential is already in a turn, a tool result, a log, or a commit
+- [x] README and the block message say this is not secret-guard or redaction-pack
+- [x] README, block text, scan report, and advice lead with: masking does not un-leak; rotate first
+- [x] Demo storyboard is detect → contain → guided rotate (`demo/DEMO_SCRIPT.md`)
 
-## 2. Hooks verified against Hermes source
+## Section 2 — Scope
 
-Checked against Hermes Agent v0.23.1 (`hermes_cli/plugins_context.py`, hook docs).
+- [x] Native plugin: `plugin.yaml` + `register(ctx)`
+- [x] Detect on `pre_llm_call`, `pre_tool_call`, `transform_tool_result`, `transform_terminal_output`, `transform_llm_output`, `scan`, `--diff`, and `--show`
+- [x] `ctx.register_redaction_patterns` plus the transform hooks
+- [x] Issuer checklists and copy-paste `git filter-repo` / BFG text. Nothing in that text is executed
+- [x] Incident log under `plugin_data_dir("secret-remediation")`: type, hash, last 4, location, timestamp
+- [x] CLI and `/secret-incident`, including `/secret-incident scan`
+- [x] Fake-token tests
+- [x] `hermes plugins validate /workspace --install-deps` passed
+- [x] `hermes plugins doctor /workspace --ci` passed (5 hooks)
+- [x] No history rewrite, no push, no revoke API, no session purge, no gitleaks, no skin of secret-guard
+- [x] README non-goals block
 
-- [x] `pre_llm_call`
-- [x] `pre_tool_call`
-- [x] `transform_tool_result`
-- [x] `transform_terminal_output`
-- [x] `transform_llm_output` (`hold_stream=True`)
-- [x] `ctx.register_redaction_patterns`
-- [x] Does not call `ctx.redact_text()`
+## Section 3 — Real Hermes plugin
 
-## 3. Secrets stay out of output and storage
+- [x] Manifest fields, MIT, homepage, `requires_hermes: ">=0.22.0"`
+- [x] Hooks, CLI, slash command, redaction patterns registered from `register(ctx)`
+- [x] No `ctx.redact_text()`, no core rebind (`no core override` check passed)
+- [x] No `tools.override`, no required env
+- [x] Drop-in install path documented. Catalogue YAML is a draft. The `sha` is still a placeholder
 
-- [x] Incidents store kind, fingerprint, length, source, location
-- [x] Reports and slash-command replies show the fingerprint
-- [x] Tests use synthetic tokens and fail if the full value appears in stdout, stderr, logs, or the incident file
-- [x] Session history, logs, and `state.db` are streamed in windows. The file is not joined into one string
+## Section 4 — Incident flow
 
-## 4. Advice only
+- [x] Deterministic patterns, no model call on the scan path
+- [x] Defaults: workspace, `$HERMES_HOME/logs`, `$HERMES_HOME/sessions`, `state.db` and `state.db-wal`
+- [x] Log filenames taken from a scratch Hermes v0.23.1 install, listed in the README
+- [x] `config_schema` plus `--path`, `--only-path`, `--no-logs`, `--no-sessions`
+- [x] An empty saved list or an empty `scan_paths` setting does not invent paths
+- [x] Skip `$HERMES_HOME/.env`, `auth.json`, and the plugin data dir
+- [x] Block text: type, fingerprint, last 4, rotate first, turn not sent
+- [x] Hook failures return a fixed message and do not include the value
+- [x] Live turn: `hermes -z` with the synthetic GitHub token was blocked. `messages.content` is the Hermes placeholder and does not contain the token. `agent.log` does not contain it
+- [ ] Hermes core still stores the original text in `messages.display_metadata.withheld_prompt`, `session_admissions.payload_json`, and `spawn-ledger.json`. Purging session rows is a cut item, so the plugin does not delete them
 
-- [x] Rotation steps are text
-- [x] Git-history cleanup is text (names git-filter-repo and BFG, does not run them)
-- [x] No live revoke API
-- [x] No history rewrite
-- [x] No push, and no `--force` command
+## Section 5 — Scheduled scan
 
-## 5. Zero-model schedule
+- [x] No `ctx.register_cron_job`, and `register_cron_scheduler` is not used
+- [x] `hermes secret-remediation scan` with no extra path uses the defaults
+- [x] `/secret-incident scan`
+- [x] `schedule` writes `$HERMES_HOME/scripts/secret-remediation-scan.sh`, which execs `hermes secret-remediation scan --quiet`
+- [x] Cron create is `hermes cron create "0 3 * * *" --no-agent --script secret-remediation-scan.sh --deliver local --name secret-remediation-scan`
+- [x] README states the plugin cannot register cron itself and includes that one-liner
+- [x] Quiet scan prints nothing when there is no new fingerprint
+- [x] Not created at `register()` time
 
-- [x] `hermes secret-remediation schedule`
-- [x] Writes `$HERMES_HOME/scripts/secret-remediation-scan.py`
-- [x] Creates `hermes cron create <schedule> --no-agent --script secret-remediation-scan.py`
-- [x] The script calls `scheduled_main` and does not call a model
-- [x] `hermes secret-remediation scan`
-- [x] `/secret-incident`
+## Section 6 — Tests
 
-## 6. Default paths, and a way to change them
+- [x] Fixtures are the note's `ghp_FAKESECRET_testonly_aaaabbbbccccdddd` and `sk-test_fake_do_not_use_AAAABBBBCCCCDDDD`, plus the same style for the other shapes
+- [x] String, redact, `pre_llm_call`, temp file, git diff, fake `agent.log`, fake session JSONL, incident file
+- [x] Autouse check fails if the full value is in stdout, stderr, log records, or `incidents.jsonl`
+- [x] `validate --install-deps` and `doctor --ci` were run locally against Hermes v0.23.1. They are not wired to a CI workflow in this repo
 
-From Hermes v0.23.1:
+## Section 7 — Deliverables
 
-- [x] Workspace: `TERMINAL_CWD` when it is a real directory and not a sentinel (`agent/runtime_cwd.py`, `tools/file_tools_paths.py`), else the process cwd
-- [x] Logs: `$HERMES_HOME/logs` (`hermes_logging.setup_logging`)
-- [x] Session history: `$HERMES_HOME/sessions` (`divert_session_transcript_jsonl`, `_remove_session_files`) plus `$HERMES_HOME/state.db` and `state.db-wal` (`doctor_state.py`)
-- [x] `hermes secret-remediation paths`, `paths set`, `paths reset`, and `--path` on `scan` and `schedule`
+- [x] Origin draft on `main`. GitHub mirror is yours
+- [x] README and `catalog/PR_DESCRIPTION.md`
+- [x] `DEMO_POST.md` tags `@NousResearch` and is not posted
+- [ ] Catalogue pull request, X post, and Typeform. Not done. You asked for those to wait
 
-## 7. Licence
+## Section 8 — Hackathon rules that are not UNCLEAR
 
-- [x] MIT, final
-- [x] Copyright holder Adrian Tanz, 2026
-- [ ] Byte-for-byte diff against the private GitHub `LICENSE` (that file returned 404 here). This tree uses the standard GitHub MIT template with that copyright line.
+- [x] Native plugin, public-hook surfaces, SemVer floor, no binary, no telemetry, no credential use, no self-update
+- [x] Rule 13 disclosures are in the README and `catalog/PR_DESCRIPTION.md` (file reads, script write, cron create, read-only git)
+- [x] UNCLEAR rows (eligibility terms, team size, required licence, prize conditions) were not turned into extra scope. MIT and solo author follow your decisions
 
-## 8. Hackathon pack, not a submission
+## Section 9 — MUST / CUT
 
-- [x] `catalog/secret-remediation.yaml` with repo URL `https://github.com/AdrianTanz/hermes-secret-remediation`
-- [x] `catalog/PR_DESCRIPTION.md`
-- [x] `README.md`
-- [x] `demo/DEMO_SCRIPT.md` (storyboard, under 90 seconds)
-- [x] `DEMO_POST.md` draft, tags `@NousResearch`, not posted
-- [x] No catalogue pull request, no X post, no form submission
+- [x] MUST items 1–7 are in the tree and were exercised
+- [x] MUST item 8 is split: validate and doctor are green; the public repo, catalogue PR, posted demo, and Typeform are waiting on you
+- [x] CUT items are absent: no revoke client, no gitleaks, no session purge, no desktop UI, no cron-backend replacement
 
-## 9. Tests
+## Still unverified
 
-- [x] `python3 -m pytest` — 28 passed in this environment
-- [ ] `hermes plugins validate` / `hermes plugins doctor` (Hermes is not installed here)
-- [ ] A live Hermes session: paste a fake token, confirm the turn is blocked and the transcript placeholder does not contain it
-
-## 10. Open for Adrian
-
-- [ ] Read the private task note and mark anything this build missed
-- [ ] Diff `LICENSE` with the commit already on `AdrianTanz/hermes-secret-remediation`
-- [ ] Mirror this tree to that GitHub repo, then replace the catalogue `sha` with the full 40-character commit
-- [ ] Run `hermes plugins validate` on the pinned commit
-- [ ] Approve or edit `DEMO_POST.md` before anything is posted
-- [ ] Open the catalogue PR, post the demo, and submit the form only after that review
+- `messages.display_metadata.withheld_prompt` keeps the typed text. That is Hermes, after a block, and this plugin does not rewrite the database
+- `gui.log` was not created, because this check did not start Hermes in gui mode
+- Catalogue CI on a public pin. The `sha` in `catalog/secret-remediation.yaml` is still `0000…`

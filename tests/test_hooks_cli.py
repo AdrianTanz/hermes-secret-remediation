@@ -25,6 +25,8 @@ def test_pre_llm_blocks_without_echoing_the_value():
     assert result["action"] == "block"
     assert_clean(result["message"])
     assert "fingerprint" in result["message"]
+    assert "does not revoke" in result["message"]
+    assert "have not sent this turn" in result["message"]
     stored = incidents_path().read_text(encoding="utf-8")
     assert_clean(stored)
 
@@ -61,16 +63,19 @@ def test_clean_text_is_left_alone():
     assert on_transform_llm_output(response_text="hello") is None
 
 
-def test_slash_command_and_advice_do_not_repeat_a_pasted_secret():
+def test_slash_command_and_advice_do_not_repeat_a_pasted_secret(tmp_path):
     blocked = secret_incident(GITHUB)
     assert_clean(blocked)
     listed = secret_incident("")
     assert_clean(listed)
     advice = advice_for("github_pat")
-    assert "will not" in advice
+    assert "does not revoke" in advice
+    assert "git filter-repo" in advice
     assert "--force" not in advice
     assert "git push" not in advice
     assert_clean(advice)
+    scanned = secret_incident("scan " + str(tmp_path))
+    assert_clean(scanned)
 
 
 def test_cli_scan_json(tmp_path, monkeypatch, capsys):
@@ -80,7 +85,7 @@ def test_cli_scan_json(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("TERMINAL_CWD", str(home_workspace))
     parser = argparse.ArgumentParser()
     setup_cli(parser)
-    args = parser.parse_args(["scan", "--path", str(home_workspace), "--json"])
+    args = parser.parse_args(["scan", "--only-path", str(home_workspace), "--json"])
     assert handle_cli(args) == 0
     out = capsys.readouterr().out
     assert_clean(out)
@@ -103,12 +108,14 @@ def test_schedule_writes_wrapper_and_cron_argv(tmp_path):
         runner=runner,
     )
     assert code == 0
-    assert seen["argv"] == cron_argv("every 6h", deliver="local")
+    from secret_remediation.paths import DEFAULT_SCHEDULE
+
+    assert seen["argv"] == cron_argv(DEFAULT_SCHEDULE, deliver="local")
     assert "--no-agent" in seen["argv"] and "--script" in seen["argv"]
     assert_clean(text)
-    wrapper = Path(seen["home"]) / "scripts" / "secret-remediation-scan.py"
+    wrapper = Path(seen["home"]) / "scripts" / "secret-remediation-scan.sh"
     source = wrapper.read_text(encoding="utf-8")
-    assert "scheduled_main" in source
+    assert "hermes secret-remediation scan --quiet" in source
     assert "openai" not in source
     assert "anthropic" not in source
 

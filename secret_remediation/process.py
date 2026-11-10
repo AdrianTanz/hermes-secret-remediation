@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-_GIT_READ = frozenset({"rev-parse", "grep", "show", "rev-list"})
+_GIT_READ = frozenset({"rev-parse", "grep", "show", "rev-list", "diff"})
 _HERMES_PREFIX = ("cron", "create")
 
 

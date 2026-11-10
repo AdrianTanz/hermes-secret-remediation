@@ -15,6 +15,7 @@ class PublicHit:
     kind: str
     fingerprint: str
     length: int
+    last4: str
     start: int
     end: int
 
@@ -50,7 +51,8 @@ def redact_text(text: str) -> tuple[str, list[PublicHit]]:
         digest = fingerprint(value)
         pieces.append(text[cursor:start])
         pieces.append(placeholder(kind, digest))
-        hits.append(PublicHit(kind, digest, len(value), start, end))
+        tail = value[-4:] if len(value) >= 12 else ""
+        hits.append(PublicHit(kind, digest, len(value), tail, start, end))
         cursor = end
     pieces.append(text[cursor:])
     return "".join(pieces), hits

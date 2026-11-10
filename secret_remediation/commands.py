@@ -8,9 +8,11 @@ from secret_remediation.paths import hermes_home
 from secret_remediation.redact import redact_text
 
 HELP = """\
-/secret-incident              list incidents (fingerprints only)
-/secret-incident <id>         one incident and rotation advice
-/secret-incident advice       rotation and git-history advice
+/secret-incident                 list incidents (fingerprints only)
+/secret-incident scan            scan the workspace, logs and session history
+/secret-incident scan <path>     scan one extra path
+/secret-incident <id>            one incident and rotation advice
+/secret-incident advice          rotation and git-history advice
 /secret-incident advice <kind>
 """
 
@@ -32,6 +34,17 @@ def secret_incident(raw_args: str = "", **kwargs: object) -> str:
             return "secret-remediation: no incidents.\n" + HELP
         body = "\n".join(format_incident(row) for row in rows[-30:])
         return body + "\n\n" + HELP
+    if parts[0] == "scan":
+        from secret_remediation.roots import resolve_roots
+        from secret_remediation.scan import format_report, record_findings, scan_roots
+
+        only = parts[1:] or None
+        roots = resolve_roots(home, only=only) if only else resolve_roots(home)
+        if not roots:
+            return "secret-remediation: no scan paths configured."
+        findings = scan_roots(roots, home=home)
+        record_findings(findings, home)
+        return format_report(findings, heading="secret-remediation scan")
     if parts[0] == "advice":
         kind = parts[1] if len(parts) > 1 else None
         return advice_for(kind)

@@ -29,7 +29,7 @@ def _src(kind: str, source: str) -> Pattern:
 
 PATTERNS: tuple[Pattern, ...] = (
     _src("github_fine_grained", r"github_pat_[A-Za-z0-9_]{20,}"),
-    _src("github_pat", r"ghp_[A-Za-z0-9]{36}"),
+    _src("github_pat", r"ghp_[A-Za-z0-9_]{36}"),
     _src("github_oauth", r"gho_[A-Za-z0-9]{36}"),
     _src("github_user_to_server", r"ghu_[A-Za-z0-9]{36}"),
     _src("github_server", r"ghs_[A-Za-z0-9]{36}"),
@@ -47,7 +47,7 @@ PATTERNS: tuple[Pattern, ...] = (
     _src("anthropic", r"sk-ant-[A-Za-z0-9_-]{20,}"),
     _src("openai_project", r"sk-proj-[A-Za-z0-9_-]{20,}"),
     _src("openrouter", r"sk-or-v1-[A-Za-z0-9]{20,}"),
-    _src("openai", r"sk-[A-Za-z0-9]{20,}"),
+    _src("openai", r"sk-[A-Za-z0-9_-]{20,}"),
     _src("slack_token", r"xox[baprs]-[A-Za-z0-9-]{10,}"),
     _src("slack_webhook", r"https://hooks\.slack\.com/services/[A-Za-z0-9/]{8,}"),
     _src("gitlab_pat", r"glpat-[A-Za-z0-9_-]{20,}"),

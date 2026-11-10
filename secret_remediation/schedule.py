@@ -1,7 +1,11 @@
 """Install the zero-model cron scan.
 
-Writes ``$HERMES_HOME/scripts/secret-remediation-scan.py`` and creates the job
+Writes ``$HERMES_HOME/scripts/secret-remediation-scan.sh`` and creates the job
 with ``hermes cron create <schedule> --no-agent --script <file>``.
+
+There is no ``ctx.register_cron_job``. Hermes no-agent cron is the scheduler.
+The wrapper calls ``hermes secret-remediation scan --quiet`` and does not
+call a model.
 """
 
 from __future__ import annotations
@@ -18,21 +22,12 @@ from secret_remediation.process import run_allowed
 Runner = Callable[[list[str], dict[str, str]], tuple[int, str]]
 
 WRAPPER = """\
-#!/usr/bin/env python3
-\"\"\"Hermes cron --no-agent wrapper. Zero model calls. Fingerprints only.\"\"\"
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-PLUGIN_ROOT = Path({root!r})
-if str(PLUGIN_ROOT) not in sys.path:
-    sys.path.insert(0, str(PLUGIN_ROOT))
-
-from secret_remediation.scan import scheduled_main
-
-if __name__ == "__main__":
-    raise SystemExit(scheduled_main())
+#!/bin/sh
+# secret-remediation scheduled scan.
+# Zero model calls. Fingerprints only. Empty stdout when nothing is new.
+# Hermes no-agent cron delivers stdout and stays silent when it is empty.
+set -eu
+exec hermes secret-remediation scan --quiet
 """
 
 
@@ -57,9 +52,10 @@ def cron_argv(schedule: str, *, deliver: str, name: str = JOB_NAME) -> list[str]
 
 
 def write_wrapper(home: Path, root: Path | None = None) -> Path:
+    del root
     destination = scripts_dir(home) / SCRIPT_NAME
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(WRAPPER.format(root=str(root or plugin_root())), encoding="utf-8")
+    destination.write_text(WRAPPER, encoding="utf-8")
     os.chmod(destination, 0o700)
     return destination
 
@@ -126,13 +122,16 @@ def install_schedule(
     home: Path,
     paths: list[Path],
     *,
-    schedule: str = "every 6h",
+    schedule: str | None = None,
     deliver: str = "local",
     git_history: bool = False,
     roles: list[str] | None = None,
     runner: Runner | None = None,
 ) -> tuple[int, str]:
+    from secret_remediation.paths import DEFAULT_SCHEDULE
+
     wrapper = write_wrapper(home)
+    schedule = schedule or DEFAULT_SCHEDULE
     config = write_schedule(
         home,
         paths,
@@ -146,7 +145,8 @@ def install_schedule(
         f"Wrote {wrapper}",
         f"Wrote {config}",
         "Scheduled scan uses zero model calls. It prints new fingerprints only.",
-        "Command: " + " ".join(argv),
+        "Command: hermes cron create " + schedule + " --no-agent --script "
+        + SCRIPT_NAME + " --name " + JOB_NAME + " --deliver " + deliver,
     ]
     if job_already_installed(home):
         lines.append(

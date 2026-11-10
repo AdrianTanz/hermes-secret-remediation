@@ -7,7 +7,7 @@ from pathlib import Path
 
 from secret_remediation.advice import advice_for
 from secret_remediation.incidents import format_incident, load_incidents
-from secret_remediation.paths import hermes_home
+from secret_remediation.paths import DEFAULT_SCHEDULE, hermes_home
 from secret_remediation.redact import redact_text
 from secret_remediation.roots import (
     clear_configured_roots,
@@ -22,13 +22,22 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     sub = parser.add_subparsers(dest="secret_remediation_command")
 
     scan = sub.add_parser("scan", help="Scan the workspace, logs and session history")
-    scan.add_argument("--path", action="append", default=None, help="Replace the scan list. Repeatable.")
-    scan.add_argument("--git-history", action="store_true", help="Also scan git history of the workspace")
+    scan.add_argument("--path", action="append", default=None, help="Extra path. Repeatable.")
+    scan.add_argument("--only-path", action="append", default=None, help="Replace the scan list. Repeatable.")
+    scan.add_argument("--no-logs", action="store_true")
+    scan.add_argument("--no-sessions", action="store_true")
+    scan.add_argument("--diff", action="store_true", help="Also scan git diff, including staged")
+    scan.add_argument("--show", default=None, help="Also stream git show for this revision")
+    scan.add_argument("--git-history", action="store_true", help="Also scan recent git history of the workspace")
+    scan.add_argument("--quiet", action="store_true", help="Print only new fingerprints. Empty when none.")
     scan.add_argument("--json", action="store_true", dest="as_json")
 
     sched = sub.add_parser("schedule", help="Install a zero-model cron scan")
     sched.add_argument("--path", action="append", default=None)
-    sched.add_argument("--every", default="every 6h")
+    sched.add_argument("--only-path", action="append", default=None)
+    sched.add_argument("--no-logs", action="store_true")
+    sched.add_argument("--no-sessions", action="store_true")
+    sched.add_argument("--every", default=None)
     sched.add_argument("--deliver", default="local")
     sched.add_argument("--git-history", action="store_true")
 
@@ -68,20 +77,46 @@ def handle_cli(args: argparse.Namespace) -> int:
         )
         return 2
     if command == "scan":
-        roots = resolve_roots(home, getattr(args, "path", None))
-        findings = scan_roots(roots, git_history=bool(getattr(args, "git_history", False)), home=home)
+        roots = resolve_roots(
+            home,
+            getattr(args, "path", None),
+            only=getattr(args, "only_path", None),
+            no_logs=bool(getattr(args, "no_logs", False)),
+            no_sessions=bool(getattr(args, "no_sessions", False)),
+        )
+        if not roots:
+            print("secret-remediation: no scan paths configured.\n", end="")
+            return 2
+        findings = scan_roots(
+            roots,
+            git_history=bool(getattr(args, "git_history", False)),
+            git_diff=bool(getattr(args, "diff", False)),
+            git_show=getattr(args, "show", None),
+            home=home,
+        )
+        quiet = bool(getattr(args, "quiet", False))
+        from secret_remediation.incidents import known_fingerprints
+
+        prior = known_fingerprints(home) if quiet else set()
         record_findings(findings, home)
-        text = format_json(findings) if getattr(args, "as_json", False) else format_report(
-            findings, heading="secret-remediation scan"
+        shown = [item for item in findings if item.fingerprint not in prior] if quiet else findings
+        text = format_json(shown) if getattr(args, "as_json", False) else format_report(
+            shown, heading="secret-remediation scan", quiet=quiet
         )
         print(text, end="")
         return 0
     if command == "schedule":
-        roots = resolve_roots(home, getattr(args, "path", None))
+        roots = resolve_roots(
+            home,
+            getattr(args, "path", None),
+            only=getattr(args, "only_path", None),
+            no_logs=bool(getattr(args, "no_logs", False)),
+            no_sessions=bool(getattr(args, "no_sessions", False)),
+        )
         code, text = install_schedule(
             home,
             [root.path for root in roots],
-            schedule=getattr(args, "every", "every 6h"),
+            schedule=getattr(args, "every", None) or DEFAULT_SCHEDULE,
             deliver=getattr(args, "deliver", "local"),
             git_history=bool(getattr(args, "git_history", False)),
             roles=[root.role for root in roots],
