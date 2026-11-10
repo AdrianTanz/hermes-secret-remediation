@@ -1,14 +1,5 @@
-# Draft X post
+# Superseded
 
-For Adrian to approve. Do not post this. Post only after the repo is public and the demo video exists.
+Do not post this. The old draft is withdrawn.
 
-The video is the storyboard in `demo/DEMO_SCRIPT.md` (90 seconds).
-
-```
-secret-remediation stops a pasted credential before Hermes sends it to the model. Incidents store a fingerprint, never the value. The cron scan uses --no-agent, so it never calls a model.
-
-https://github.com/AdrianTanz/hermes-secret-remediation
-@NousResearch
-```
-
-258 characters, including the URL and `@NousResearch`. That fits a 280-character post.
+It said incidents never store the value and stopped there. That skips the Hermes copies and the purge. The current account is the README section "Known limitations" and `catalog/PR_DESCRIPTION.md` Rule 13. There is no replacement post in this file.

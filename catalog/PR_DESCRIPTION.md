@@ -32,7 +32,13 @@ Session history, logs, and the database are read in 64KiB windows. A match is ha
 ## Rule 13
 
 - Reads the files on the scan list. By default that is the workspace, Hermes logs, session files, and `state.db` / `state.db-wal`. It does not read `$HERMES_HOME/.env` or `$HERMES_HOME/auth.json`.
-- Does not use a value it finds. It hashes it, discards it, and stores the fingerprint.
+- Does not send a value it finds to a model, a revoke API, or the network. It hashes it. Incident lines store the fingerprint and the last 4 characters, not the value.
+- After a block, and when `purge --apply` or `scan --purge --apply` is used, rewrites credential-shaped text to the `[secret:kind:fingerprint]` placeholder in:
+  - `$HERMES_HOME/state.db` `messages.display_metadata` key `withheld_prompt`
+  - `$HERMES_HOME/state.db` `session_admissions.payload_json`, and `payload_digest` when that column exists (Hermes v0.23.1 canonical hash of the redacted payload)
+  - `spawn-ledger.json` field `argv`, at `$HERMES_HOME/spawn-ledger.json` and, when the home is `<root>/profiles/<name>`, at `<root>/spawn-ledger.json`
+- `purge` and `scan --purge` without `--apply` only print counts. They do not write those stores.
+- That purge does not clear provider logs, backups or snapshots, shell history, `$HERMES_HOME/sessions/` JSONL, `messages.content`, `messages.api_content`, `messages.tool_calls`, other `display_metadata` keys, or SQLite free-page slack. It does not `VACUUM` `state.db`. A failed rewrite is logged as `purge_failed` and the plaintext can remain. Hermes can write `withheld_prompt` again after the short automatic retry.
 - Writes `$HERMES_HOME/plugin-data/secret-remediation/incidents.jsonl` via `plugin_data_dir("secret-remediation")`, plus `scan_paths.json` (mode 0600).
 - Writes `$HERMES_HOME/scripts/secret-remediation-scan.sh` (mode 0700).
 - Spawns `hermes cron create … --no-agent --script …` when scheduling. If `hermes` is not on `PATH`, the wrapper is still written and the command is printed.
