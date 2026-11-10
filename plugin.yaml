@@ -1,7 +1,7 @@
 name: secret-remediation
 version: 0.1.0
 description: After a credential has already leaked into Hermes or git, contain it and guide rotation. Fingerprints only. Not another masking pack.
-author: Adrian Tanz
+author: AdrianTanz
 license: MIT
 homepage: https://github.com/AdrianTanz/hermes-secret-remediation
 requires_hermes: ">=0.22.0"

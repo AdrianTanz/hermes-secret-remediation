@@ -42,5 +42,5 @@ def register(ctx) -> None:
         "secret-incident",
         secret_incident,
         description="List secret incidents and show rotation advice. Fingerprints only.",
-        args_hint="[id|advice|list]",
+        args_hint="[scan|purge|id|advice|list]",
     )

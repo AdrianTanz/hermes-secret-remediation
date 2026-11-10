@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from secret_remediation.incidents import record_hits
+from secret_remediation.purge import schedule_purge
 from secret_remediation.redact import PublicHit, redact_text
 
 FAIL_CLOSED = (
@@ -77,6 +78,10 @@ def _summarize(hits: list[PublicHit], where: str) -> str:
         "This plugin will not revoke it, rewrite git history, or push. "
         "Details: /secret-incident"
     )
+    lines.append(
+        "A local purge will try to replace the value in Hermes state. "
+        "That does not remove provider logs, backups, or shell history."
+    )
     return "\n".join(lines)
 
 
@@ -90,8 +95,10 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         if not hits:
             return None
         _record(hits, "pre_llm_call", "user_message", _session(kwargs))
+        schedule_purge()
         return {"action": "block", "message": _summarize(hits, "this message")}
     except Exception:
+        schedule_purge()
         return {"action": "block", "message": FAIL_CLOSED}
 
 
@@ -107,8 +114,10 @@ def on_pre_tool_call(**kwargs: Any) -> dict[str, str] | None:
             return None
         location = _safe_location(f"tool:{tool_name}")
         _record(hits, "pre_tool_call", location, _session(kwargs))
+        schedule_purge()
         return {"action": "block", "message": _summarize(hits, "the tool arguments")}
     except Exception:
+        schedule_purge()
         return {"action": "block", "message": FAIL_CLOSED}
 
 

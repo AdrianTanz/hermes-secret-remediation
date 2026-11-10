@@ -27,7 +27,35 @@ def _src(kind: str, source: str) -> Pattern:
     return Pattern(kind, source, True)
 
 
-PATTERNS: tuple[Pattern, ...] = (
+# Case-sensitive on purpose: ``(?i)`` makes a 1MB scan several times slower, and
+# env files use ``password=`` or ``PASSWORD=``. Colon assignments are omitted so
+# the placeholder ``[secret:kind:fingerprint]`` is not detected again.
+_ASSIGN_VALUE = (
+    r"\s*=\s*['\"]?(?!changeme(?:[^A-Za-z0-9]|$)|password(?:[^A-Za-z0-9]|$)|"
+    r"secret(?:[^A-Za-z0-9]|$)|example(?:[^A-Za-z0-9]|$)|placeholder(?:[^A-Za-z0-9]|$)|"
+    r"none(?:[^A-Za-z0-9]|$)|null(?:[^A-Za-z0-9]|$)|true(?:[^A-Za-z0-9]|$)|"
+    r"false(?:[^A-Za-z0-9]|$)|undefined(?:[^A-Za-z0-9]|$)|your(?:[^A-Za-z0-9]|$))"
+    r"[A-Za-z0-9+/=_.~!#$%^*-]{8,256}"
+)
+_ASSIGN_KEYS = (
+    ("password_assignment", "password"),
+    ("password_assignment", "PASSWORD"),
+    ("api_key_assignment", "api_key"),
+    ("api_key_assignment", "API_KEY"),
+    ("api_key_assignment", "api-key"),
+    ("api_key_assignment", "API-KEY"),
+    ("api_key_assignment", "apikey"),
+    ("api_key_assignment", "APIKEY"),
+    ("secret_assignment", "secret"),
+    ("secret_assignment", "SECRET"),
+)
+
+
+def _assignment(kind: str, key: str) -> Pattern:
+    return _src(kind, key + _ASSIGN_VALUE)
+
+
+_PATTERNS: tuple[Pattern, ...] = (
     _src("github_fine_grained", r"github_pat_[A-Za-z0-9_]{20,}"),
     _src("github_pat", r"ghp_[A-Za-z0-9_]{36}"),
     _src("github_oauth", r"gho_[A-Za-z0-9]{36}"),
@@ -62,8 +90,45 @@ PATTERNS: tuple[Pattern, ...] = (
     _src("jwt", r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
     _src(
         "private_key",
-        r"-----BEGIN [A-Z ]{0,30}PRIVATE KEY-----[A-Za-z0-9+/=\r\n]{16,8000}-----END [A-Z ]{0,30}PRIVATE KEY-----",
+        r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[A-Za-z0-9+/=\r\n ]{16,8000}-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----",
     ),
+    # BEGIN without END. Listed after the complete block so a full key stays one hit.
+    _src(
+        "private_key",
+        r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[A-Za-z0-9+/=\r\n ]{16,8000}",
+    ),
+    *(_assignment(kind, key) for kind, key in _ASSIGN_KEYS),
+    _src(
+        "authorization_bearer",
+        r"Authorization:\s*[Bb]earer\s+[A-Za-z0-9._~+/-]{16,512}",
+    ),
+    _src(
+        "authorization_bearer",
+        r"authorization:\s*[Bb]earer\s+[A-Za-z0-9._~+/-]{16,512}",
+    ),
+)
+
+# Schemes with a literal prefix. A general ``scheme://`` pattern cannot be
+# registered: Hermes requires two leading literal characters.
+_URL_SCHEMES = (
+    "https://",
+    "http://",
+    "postgres://",
+    "postgresql://",
+    "mysql://",
+    "mongodb://",
+    "mongodb+srv://",
+    "redis://",
+    "rediss://",
+    "amqp://",
+    "amqps://",
+    "ftp://",
+    "ftps://",
+)
+_URL_USERINFO = r"[^\s/:@]{1,128}:[^\s/@]{4,256}@"
+
+PATTERNS = _PATTERNS + tuple(
+    _src("url_userinfo", scheme + _URL_USERINFO) for scheme in _URL_SCHEMES
 )
 
 # POSIX ERE used only as a filename prefilter for `git grep -l`. Python
@@ -74,8 +139,14 @@ GIT_GREP_ERE = (
     "aws_secret_access_key|AWS_SECRET_ACCESS_KEY|"
     "sk-ant-|sk-proj-|sk-or-v1-|sk-|xoxb-|xoxa-|xoxp-|xoxr-|xoxs-|"
     "hooks.slack.com/services/|glpat-|hf_|sk_live_|rk_live_|sk_test_|"
-    "SG\\.|pypi-|npm_|AIza|eyJ|PRIVATE KEY"
+    "SG\\.|pypi-|npm_|AIza|eyJ|PRIVATE KEY|password|api_key|api-key|apikey|"
+    "Authorization|://"
 )
+
+# A bare AWS secret has no literal prefix, so it is not registered. Scanning
+# every 40-character window is too slow and collides with git SHAs. Hooks look
+# only at tokens that already contain ``+`` or ``/``.
+_AWS_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 
 
 def literal_prefix(pattern: str) -> str:
@@ -155,3 +226,38 @@ def redaction_sources() -> list[str]:
         if pattern.register and not redaction_pattern_errors(pattern.source):
             sources.append(pattern.source)
     return sources
+
+
+def unlabeled_aws_secret(token: str) -> bool:
+    """40-character AWS secret shape that is not a hex digest."""
+    if len(token) != 40 or re.fullmatch(r"[0-9a-fA-F]{40}", token):
+        return False
+    return (
+        any(char.islower() for char in token)
+        and any(char.isupper() for char in token)
+        and any(char.isdigit() or char in "+/" for char in token)
+    )
+
+
+def unlabeled_aws_spans(text: str) -> list[tuple[int, int, str]]:
+    found: list[tuple[int, int, str]] = []
+    seen: set[int] = set()
+    for mark in ("+", "/"):
+        start = 0
+        while True:
+            index = text.find(mark, start)
+            if index < 0:
+                break
+            left = index
+            while left > 0 and text[left - 1] in _AWS_ALPHABET:
+                left -= 1
+            right = index + 1
+            while right < len(text) and text[right] in _AWS_ALPHABET:
+                right += 1
+            if left not in seen and right - left == 40:
+                token = text[left:right]
+                if unlabeled_aws_secret(token):
+                    seen.add(left)
+                    found.append((left, right, token))
+            start = right
+    return found

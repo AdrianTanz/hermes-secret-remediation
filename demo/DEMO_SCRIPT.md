@@ -9,6 +9,6 @@
 | 28–46s | A file read whose output contained the same fake token. The tool result on screen is `[secret:github_pat:…]`. | Contain. Tool output, terminal output, and the reply are rewritten, and the stream is held until that rewrite exists. |
 | 46–64s | `/secret-incident`, then `/secret-incident advice github_pat`. The advice is the GitHub checklist and the filter-repo text. | Guide. The checklist is text. The plugin does not call GitHub, does not rewrite history, and does not push. |
 | 64–80s | `hermes secret-remediation scan` on a fixture with a fake `agent.log` line and a one-line session JSONL. Output is fingerprints and paths. | The default scan is the workspace, `$HERMES_HOME/logs`, and session history. Those files are streamed. Only the fingerprint comes out. |
-| 80–90s | `hermes cron list` showing `secret-remediation-scan`, no-agent, script `secret-remediation-scan.sh`. | The schedule is Hermes cron with no model call. End card: Adrian Tanz. |
+| 80–90s | `hermes cron list` showing `secret-remediation-scan`, no-agent, script `secret-remediation-scan.sh`. | The schedule is Hermes cron with no model call. End card: AdrianTanz. |
 
 Total: 90 seconds.

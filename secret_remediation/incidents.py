@@ -69,6 +69,32 @@ def record_incidents(incidents: list[dict[str, Any]], home: Path | None = None) 
     _trim(path)
 
 
+def record_status(
+    kind: str,
+    location: str,
+    *,
+    source: str = "purge",
+    home: Path | None = None,
+) -> None:
+    """A fingerprint-free incident. ``kind`` and ``location`` are fixed codes."""
+    record_incidents(
+        [
+            {
+                "id": "inc_" + uuid.uuid4().hex[:12],
+                "ts": _now(),
+                "kind": kind,
+                "fingerprint": "",
+                "last4": "",
+                "length": 0,
+                "source": source,
+                "location": location,
+                "session_id": "",
+            }
+        ],
+        home,
+    )
+
+
 def record_hits(
     hits: list[PublicHit],
     *,

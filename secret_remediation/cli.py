@@ -14,6 +14,7 @@ from secret_remediation.roots import (
     resolve_roots,
     save_configured_roots,
 )
+from secret_remediation.purge import purge
 from secret_remediation.scan import format_json, format_report, record_findings, scan_roots
 from secret_remediation.schedule import install_schedule
 
@@ -31,6 +32,11 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     scan.add_argument("--git-history", action="store_true", help="Also scan recent git history of the workspace")
     scan.add_argument("--quiet", action="store_true", help="Print only new fingerprints. Empty when none.")
     scan.add_argument("--json", action="store_true", dest="as_json")
+    scan.add_argument("--purge", action="store_true", help="Also count secrets in Hermes state and the spawn ledger.")
+    scan.add_argument("--apply", action="store_true", help="With --purge, rewrite those stores. Default is a dry-run.")
+
+    purge_cmd = sub.add_parser("purge", help="Rewrite secrets in Hermes state and the spawn ledger")
+    purge_cmd.add_argument("--apply", action="store_true", help="Rewrite. Without this flag, print counts only.")
 
     sched = sub.add_parser("schedule", help="Install a zero-model cron scan")
     sched.add_argument("--path", action="append", default=None)
@@ -68,12 +74,18 @@ def _print_roots(home: Path, explicit: list[str] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _print_purge(home: Path, *, apply: bool) -> int:
+    report = purge(home, apply=apply)
+    print(report.render(apply=apply), end="")
+    return 1 if report.failed else 0
+
+
 def handle_cli(args: argparse.Namespace) -> int:
     command = getattr(args, "secret_remediation_command", None)
     home = _home()
     if command in (None, ""):
         print(
-            "usage: hermes secret-remediation {scan,schedule,paths,advice,incidents}",
+            "usage: hermes secret-remediation {scan,purge,schedule,paths,advice,incidents}",
         )
         return 2
     if command == "scan":
@@ -104,7 +116,14 @@ def handle_cli(args: argparse.Namespace) -> int:
             shown, heading="secret-remediation scan", quiet=quiet
         )
         print(text, end="")
+        if bool(getattr(args, "purge", False)):
+            return _print_purge(home, apply=bool(getattr(args, "apply", False)))
+        if bool(getattr(args, "apply", False)):
+            print("secret-remediation: --apply is only valid with --purge\n", end="")
+            return 2
         return 0
+    if command == "purge":
+        return _print_purge(home, apply=bool(getattr(args, "apply", False)))
     if command == "schedule":
         roots = resolve_roots(
             home,

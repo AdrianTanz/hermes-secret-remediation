@@ -57,6 +57,11 @@ _ROTATION: dict[str, str] = {
     "google_api": "Google Cloud console: APIs and Services, Credentials. Delete the API key, create a new one, and restrict it by API and by referrer or IP.",
     "jwt": "A JWT is a bearer credential. Revoke the session or rotate the signing key at the issuer. Do not decode it into a log. Anyone who holds the token can replay it until it expires or the signature dies.",
     "private_key": "Remove the private key from disk and from history after you have a replacement. Generate a new key pair. Remove the old public key from authorized_keys, deploy keys, CI and the host that trusted it. The old private key stays valid until every copy of the public key is gone.",
+    "password_assignment": "Change the password at the service that checks it, then store the new one outside chat, shell history and git. A password in a URL or an env assignment is the same leak.",
+    "api_key_assignment": "Revoke the API key at the issuer and create a replacement. Update the secret store, not the chat transcript.",
+    "secret_assignment": "Treat the assigned value as a credential. Revoke or rotate it at the issuer, then store the replacement outside chat, shell history and git.",
+    "url_userinfo": "A URL of the form scheme://user:password@host is a credential. Rotate that password or token, and stop embedding secrets in URLs.",
+    "authorization_bearer": "An Authorization Bearer token is a credential. Revoke the session or rotate the token at the issuer. Do not copy it into a log.",
 }
 
 GENERIC = (

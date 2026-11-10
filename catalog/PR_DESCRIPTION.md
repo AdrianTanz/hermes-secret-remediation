@@ -4,9 +4,9 @@ Draft for Adrian. Do not open this pull request until he has reviewed it and the
 
 ## What it does
 
-`secret-remediation` stops credential-shaped text from travelling further through Hermes, and it tells the user how to rotate the credential and clean git history. The value is not stored and not printed. Incidents carry a kind and a fingerprint.
+`secret-remediation` stops credential-shaped text from travelling further through Hermes, and it tells the user how to rotate the credential and clean git history. Incident lines store a kind and a fingerprint, not the value. Hermes can still have written the typed text; the plugin then tries to replace it in `messages.display_metadata.withheld_prompt`, `session_admissions.payload_json`, and `spawn-ledger.json` `argv`. That purge does not cover provider logs, backups, shell history, or session JSONL. See the README section Known limitations.
 
-Author: Adrian Tanz.
+Author: AdrianTanz.
 
 ## Surfaces
 
