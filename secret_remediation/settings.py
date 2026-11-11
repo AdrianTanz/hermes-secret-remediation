@@ -20,7 +20,16 @@ def _narrow(raw: Any) -> dict[str, Any]:
             kept["scan_paths"] = [str(item) for item in paths if isinstance(item, str)]
         elif paths is None:
             kept["scan_paths"] = []
-    for key in ("include_logs", "include_sessions"):
+    for key in (
+        "include_logs",
+        "include_sessions",
+        "purge_sessions",
+        "purge_messages",
+        "purge_shell_history",
+        "purge_backups",
+        "purge_vacuum",
+        "keep_backups",
+    ):
         if key in raw and isinstance(raw[key], bool):
             kept[key] = raw[key]
     return kept
@@ -96,8 +105,18 @@ def _parse_plain(text: str) -> dict[str, Any]:
         in_paths = False
         if stripped.startswith("include_logs:"):
             settings["include_logs"] = stripped.split(":", 1)[1].strip().lower() == "true"
-        elif stripped.startswith("include_sessions:"):
-            settings["include_sessions"] = stripped.split(":", 1)[1].strip().lower() == "true"
+        elif ":" in stripped:
+            key, value = stripped.split(":", 1)
+            if key in {
+                "include_sessions",
+                "purge_sessions",
+                "purge_messages",
+                "purge_shell_history",
+                "purge_backups",
+                "purge_vacuum",
+                "keep_backups",
+            }:
+                settings[key] = value.strip().lower() == "true"
     return _narrow(settings)
 
 

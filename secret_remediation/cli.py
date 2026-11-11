@@ -19,6 +19,14 @@ from secret_remediation.scan import format_json, format_report, record_findings,
 from secret_remediation.schedule import install_schedule
 
 
+def _add_purge_optouts(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--no-sessions", action="store_true", help="Do not rewrite session JSONL.")
+    parser.add_argument("--no-messages", action="store_true", help="Do not rewrite message body columns.")
+    parser.add_argument("--no-shell-history", action="store_true", help="Do not rewrite bash, zsh, or fish history.")
+    parser.add_argument("--no-backups", action="store_true", help="Do not rewrite Hermes sqlite snapshots or emergency .bak files.")
+    parser.add_argument("--no-vacuum", action="store_true", help="Do not VACUUM state.db.")
+
+
 def setup_cli(parser: argparse.ArgumentParser) -> None:
     sub = parser.add_subparsers(dest="secret_remediation_command")
 
@@ -32,44 +40,56 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     scan.add_argument("--git-history", action="store_true", help="Also scan recent git history of the workspace")
     scan.add_argument("--quiet", action="store_true", help="Print only new fingerprints. Empty when none.")
     scan.add_argument("--json", action="store_true", dest="as_json")
-    scan.add_argument("--purge", action="store_true", help="Also count secrets in Hermes state and the spawn ledger.")
-    scan.add_argument("--apply", action="store_true", help="With --purge, rewrite those stores. Default is a dry-run.")
+    scan.add_argument("--purge", action="store_true", help="Also purge. Writes unless --dry-run.")
+    scan.add_argument("--apply", action="store_true", help="Accepted for compatibility. Purge already writes.")
+    scan.add_argument("--dry-run", action="store_true", help="With --purge, print counts only.")
 
     purge_cmd = sub.add_parser(
         "purge",
-        help="Rewrite local credential copies. Dry-run unless --apply.",
+        help="Rewrite local copies now. Writes unless --dry-run.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Default dry-run counts secrets in messages.display_metadata.withheld_prompt, "
-            "session_admissions.payload_json, and spawn-ledger.json argv. "
-            "--apply rewrites those three. It does not touch the opt-in targets below.\n\n"
-            "Opt-in, still dry-run unless --apply. Each rewrite is backed up under "
-            "plugin-data/secret-remediation/backups/ first. A failed backup does not "
-            "change the original. Counts only; the secret is not printed.\n"
-            "  --sessions       $HERMES_HOME/sessions/*.jsonl lines\n"
-            "  --messages       messages.content, api_content, tool_calls, and "
-            "display_metadata strings other than withheld_prompt. Resume and /retry "
-            "then see the placeholder, including tool arguments.\n"
-            "  --vacuum         PRAGMA secure_delete on this connection only, then VACUUM "
-            "the live state.db. Refuses if another process has the database open. "
-            "Does not make later Hermes writes use secure_delete.\n"
-            "  --shell-history  ~/.bash_history, ~/.zsh_history, and fish_history. "
-            "A running shell can write its memory back over the file on exit.\n"
-            "  --backups        state-snapshots/**/state.db and "
-            "state.db.pre-update-emergency-*.bak. Zip files in backups/ are counted "
-            "and not rewritten.\n\n"
-            "Not cleared from here: provider logs (the report names the kind and a "
-            "revoke doc when one exists; no provider API is called), arbitrary backups, "
-            "sessions.title, shell scrollback, SSD remnants, and the backup copies this "
-            "command just wrote."
+            "Writes happen by default. A block does this too. "
+            "Pass --dry-run to preview counts and write nothing.\n\n"
+            "Cleared unless you opt out: withheld_prompt, session_admissions "
+            "payload_json and payload_digest (recomputed so a replay of the "
+            "original request is refused), spawn-ledger.json argv, "
+            "every $HERMES_HOME/sessions/**/*.jsonl (recursive, not only the "
+            "top directory), messages.content, api_content, tool_calls, and "
+            "display_metadata. A blocked-turn /retry reads withheld_prompt. "
+            "The column rewrite is separate: a replayed tool call sends the "
+            "placeholder in its arguments because Hermes re-reads tool_calls. "
+            "Also cleared: bash, zsh, and fish history, which are files outside "
+            "Hermes, state-snapshots/**/state.db, and "
+            "state.db.pre-update-emergency-*.bak. VACUUM runs when state.db "
+            "and its WAL are not open.\n\n"
+            "Opt out: --no-sessions --no-messages --no-shell-history "
+            "--no-backups --no-vacuum. --keep-backups leaves the safety copy. "
+            "The same switches exist as plugin settings purge_sessions, "
+            "purge_messages, purge_shell_history, purge_backups, purge_vacuum, "
+            "keep_backups, and as SECRET_REMEDIATION_NO_* / "
+            "SECRET_REMEDIATION_KEEP_BACKUPS.\n\n"
+            "A safety copy is deleted after the rewrite reopens, parses, "
+            "keeps the same line and row counts, and differs only by "
+            "placeholders, with payload_digest still matching the redacted "
+            "payload. If that check fails, the copy is kept and its path is "
+            "printed. Replaying the original request is refused. That is expected.\n\n"
+            "Not covered: provider logs (the report says rotate_or_revoke=<kind> "
+            "and does not call a provider), backups/pre-update-*.zip and "
+            "backups/pre-migration-*.zip (counted, not rewritten), Time Machine, "
+            "cloud sync, and any other external backup, sessions.title, terminal "
+            "scrollback, a secret split across two JSONL lines, and SSD remnants. "
+            "A running shell can write its memory back over a history file on exit. "
+            "If VACUUM is skipped because the database is open, the summary names "
+            "vacuum as incomplete and the other stores still finish. Run "
+            "`hermes secret-remediation purge --vacuum` when Hermes is not holding "
+            "the database."
         ),
     )
-    purge_cmd.add_argument("--apply", action="store_true", help="Rewrite. Without this flag, print counts only.")
-    purge_cmd.add_argument("--sessions", action="store_true", help="Opt in: session JSONL files.")
-    purge_cmd.add_argument("--messages", action="store_true", help="Opt in: message body columns and other display_metadata.")
-    purge_cmd.add_argument("--vacuum", action="store_true", help="Opt in: VACUUM state.db if no other process has it open.")
-    purge_cmd.add_argument("--shell-history", action="store_true", help="Opt in: bash, zsh, and fish history files.")
-    purge_cmd.add_argument("--backups", action="store_true", help="Opt in: known Hermes sqlite snapshots. Zips are left as-is.")
+    purge_cmd.add_argument("--dry-run", action="store_true", help="Print counts only. Do not write.")
+    purge_cmd.add_argument("--apply", action="store_true", help="Accepted for compatibility. Writes are already the default.")
+    purge_cmd.add_argument("--keep-backups", action="store_true", help="Keep safety copies even after verification.")
+    _add_purge_optouts(purge_cmd)
 
     sched = sub.add_parser("schedule", help="Install a zero-model cron scan")
     sched.add_argument("--path", action="append", default=None)
@@ -107,15 +127,18 @@ def _print_roots(home: Path, explicit: list[str] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _print_purge(home: Path, args: argparse.Namespace, *, apply: bool) -> int:
+def _print_purge(home: Path, args: argparse.Namespace, *, apply: bool, command: str) -> int:
+    # scan --no-sessions only drops session files from the scan list.
+    purge_sessions = True if command == "scan" else not bool(getattr(args, "no_sessions", False))
     report = purge(
         home,
         apply=apply,
-        sessions=bool(getattr(args, "sessions", False)),
-        messages=bool(getattr(args, "messages", False)),
-        vacuum=bool(getattr(args, "vacuum", False)),
-        shell_history=bool(getattr(args, "shell_history", False)),
-        backups=bool(getattr(args, "backups", False)),
+        sessions=purge_sessions,
+        messages=not bool(getattr(args, "no_messages", False)),
+        vacuum=not bool(getattr(args, "no_vacuum", False)),
+        shell_history=not bool(getattr(args, "no_shell_history", False)),
+        backups=not bool(getattr(args, "no_backups", False)),
+        keep_backups=True if bool(getattr(args, "keep_backups", False)) else None,
     )
     print(report.render(apply=apply), end="")
     return 1 if report.failed else 0
@@ -158,13 +181,13 @@ def handle_cli(args: argparse.Namespace) -> int:
         )
         print(text, end="")
         if bool(getattr(args, "purge", False)):
-            return _print_purge(home, args, apply=bool(getattr(args, "apply", False)))
-        if bool(getattr(args, "apply", False)):
-            print("secret-remediation: --apply is only valid with --purge\n", end="")
+            return _print_purge(home, args, apply=not bool(getattr(args, "dry_run", False)), command="scan")
+        if bool(getattr(args, "dry_run", False)):
+            print("secret-remediation: --dry-run on scan applies only with --purge\n", end="")
             return 2
         return 0
     if command == "purge":
-        return _print_purge(home, args, apply=bool(getattr(args, "apply", False)))
+        return _print_purge(home, args, apply=not bool(getattr(args, "dry_run", False)), command="purge")
     if command == "schedule":
         roots = resolve_roots(
             home,

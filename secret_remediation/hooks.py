@@ -79,8 +79,9 @@ def _summarize(hits: list[PublicHit], where: str) -> str:
         "Details: /secret-incident"
     )
     lines.append(
-        "A local purge will try to replace the value in Hermes state. "
-        "That does not remove provider logs, backups, or shell history."
+        "A local purge rewrites Hermes chat history and shell history by default. "
+        "A replayed tool call sends the placeholder, because Hermes re-reads tool_calls. "
+        "That does not remove provider logs."
     )
     return "\n".join(lines)
 

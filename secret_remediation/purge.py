@@ -31,6 +31,8 @@ from secret_remediation.redact import redact_text
 # pass covers about a second and a half, then stops. ``purge --apply`` is the
 # later manual pass.
 RETRY_DELAYS = (0.0, 0.05, 0.15, 0.40, 0.90)
+# Tried after the short pass when VACUUM was refused because Hermes still holds state.db.
+VACUUM_RETRY_DELAYS = (2.0, 5.0, 15.0)
 
 _pending_lock = threading.Lock()
 _pending: list[threading.Thread] = []
@@ -89,6 +91,9 @@ class PurgeReport:
     codes: list[str] = field(default_factory=list)
     kinds: set[str] = field(default_factory=set)
     extra_lines: list[str] = field(default_factory=list)
+    incomplete: list[str] = field(default_factory=list)
+    kept_backups: list[str] = field(default_factory=list)
+    safety_deleted: int = 0
 
     @property
     def failed(self) -> bool:
@@ -118,6 +123,12 @@ class PurgeReport:
         ]
         if self.failure:
             lines.append(f"failure={self.failure}")
+        if self.incomplete:
+            lines.append("incomplete=" + ",".join(self.incomplete))
+        if self.safety_deleted or self.kept_backups:
+            lines.append(f"safety_copies_deleted={self.safety_deleted}")
+        for kept in self.kept_backups:
+            lines.append(f"backup_kept={kept}")
         lines.extend(self.extra_lines)
         lines.extend(rotate_lines(self.kinds))
         return "\n".join(lines) + "\n"
@@ -162,31 +173,42 @@ def state_db_path(home: Path | None = None) -> Path:
 def purge(
     home: Path | None = None,
     *,
-    apply: bool = False,
+    apply: bool = True,
     timeout: float = 5.0,
-    sessions: bool = False,
-    messages: bool = False,
-    vacuum: bool = False,
-    shell_history: bool = False,
-    backups: bool = False,
+    sessions: bool | None = None,
+    messages: bool | None = None,
+    vacuum: bool | None = None,
+    shell_history: bool | None = None,
+    backups: bool | None = None,
+    keep_backups: bool | None = None,
+    schedule_vacuum: bool = True,
 ) -> PurgeReport:
-    """Count credential rows. ``apply=True`` rewrites them.
+    """Rewrite every local target. ``apply=False`` previews and writes nothing.
 
-    A store with nothing to change is not opened for writing, so a no-op does
-    not create a WAL, a lock file, or a bumped row.
+    Targets default on. Pass False, or set the plugin config / env opt-out, to skip one.
+    A no-op store is not rewritten.
     """
-    root = (home or hermes_home()).resolve()
-    preview = _run(root, timeout=timeout if not apply else min(timeout, 1.0), write=False)
-    opted = any((sessions, messages, vacuum, shell_history, backups))
-    if not apply:
-        if opted:
-            from secret_remediation.purge_extra import scrub_opt_in
+    from secret_remediation.purge_targets import resolve_targets
 
-            scrub_opt_in(
-                root, preview, apply=False, timeout=timeout,
-                sessions=sessions, messages=messages, vacuum=vacuum,
-                shell_history=shell_history, backups=backups,
-            )
+    root = (home or hermes_home()).resolve()
+    chosen = resolve_targets(
+        root,
+        sessions=sessions,
+        messages=messages,
+        vacuum=vacuum,
+        shell_history=shell_history,
+        backups=backups,
+        keep_backups=keep_backups,
+    )
+    preview = _run(root, timeout=timeout if not apply else min(timeout, 1.0), write=False)
+    from secret_remediation.purge_extra import scrub_opt_in
+
+    if not apply:
+        scrub_opt_in(
+            root, preview, apply=False, timeout=timeout, keep_backups=chosen["keep_backups"],
+            sessions=chosen["sessions"], messages=chosen["messages"], vacuum=chosen["vacuum"],
+            shell_history=chosen["shell_history"], backups=chosen["backups"],
+        )
         return preview
     if preview.replacements == 0 and not (preview.failed and _retryable(preview)):
         report = preview
@@ -198,14 +220,13 @@ def purge(
             database=_needs_database(preview),
             ledgers=_needs_ledger(preview),
         )
-    if opted:
-        from secret_remediation.purge_extra import scrub_opt_in
-
-        scrub_opt_in(
-            root, report, apply=True, timeout=timeout,
-            sessions=sessions, messages=messages, vacuum=vacuum,
-            shell_history=shell_history, backups=backups,
-        )
+    scrub_opt_in(
+        root, report, apply=True, timeout=timeout, keep_backups=chosen["keep_backups"],
+        sessions=chosen["sessions"], messages=chosen["messages"], vacuum=chosen["vacuum"],
+        shell_history=chosen["shell_history"], backups=chosen["backups"],
+    )
+    if schedule_vacuum and "vacuum" in report.incomplete:
+        _schedule_vacuum_retry(root)
     return report
 
 
@@ -232,6 +253,30 @@ def flush_purges(timeout: float = 5.0) -> None:
         _pending.clear()
     for thread in threads:
         thread.join(timeout)
+
+
+def _schedule_vacuum_retry(home: Path) -> None:
+    if not VACUUM_RETRY_DELAYS:
+        return
+
+    def later() -> None:
+        from secret_remediation.purge_extra import _foreign_db_open
+
+        for delay in VACUUM_RETRY_DELAYS:
+            time.sleep(delay)
+            path = state_db_path(home)
+            if not path.is_file() or _foreign_db_open(path):
+                continue
+            purge(
+                home, apply=True, timeout=2.0, schedule_vacuum=False,
+                sessions=False, messages=False, shell_history=False, backups=False, vacuum=True,
+            )
+            return
+
+    thread = threading.Thread(target=later, name="secret-remediation-vacuum", daemon=True)
+    with _pending_lock:
+        _pending.append(thread)
+    thread.start()
 
 
 def _purge_worker(home: Path) -> None:

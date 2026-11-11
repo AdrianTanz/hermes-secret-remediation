@@ -22,7 +22,16 @@ from secret_remediation.purge import (
     _table_columns,
     state_db_path,
 )
+from secret_remediation.purge_verify import (
+    database_rewrite_ok,
+    restore_file,
+    secure_unlink,
+    text_rewrite_ok,
+)
 from secret_remediation.redact import redact_text
+
+# Tests set this so a rewrite raises after the safety copy exists and before replace.
+CRASH_BEFORE_REPLACE = False
 
 _BODY_COLUMNS = ("content", "api_content", "tool_calls")
 
@@ -38,17 +47,22 @@ def scrub_opt_in(
     vacuum: bool,
     shell_history: bool,
     backups: bool,
+    keep_backups: bool,
 ) -> None:
+    # Vacuum is last so a refusal does not skip the other stores.
     if sessions:
-        _sessions(home, report, apply=apply)
+        _sessions(home, report, apply=apply, keep_backups=keep_backups)
     if messages:
-        _message_columns(state_db_path(home), report, apply=apply, timeout=timeout, home=home)
-    if backups:
-        _hermes_backups(home, report, apply=apply, timeout=timeout)
-    if vacuum:
-        _vacuum(state_db_path(home), report, apply=apply, home=home)
+        _message_columns(
+            state_db_path(home), report, apply=apply, timeout=timeout, home=home,
+            keep_backups=keep_backups,
+        )
     if shell_history:
-        _shell_history(home, report, apply=apply)
+        _shell_history(home, report, apply=apply, keep_backups=keep_backups)
+    if backups:
+        _hermes_backups(home, report, apply=apply, timeout=timeout, keep_backups=keep_backups)
+    if vacuum:
+        _vacuum(state_db_path(home), report, apply=apply, home=home, keep_backups=keep_backups)
 
 
 def _fail(report: PurgeReport, home: Path, code: str) -> None:
@@ -101,7 +115,52 @@ def _sqlite_backup(source: Path, dest: Path) -> bool:
             src.close()
 
 
-def _sessions(home: Path, report: PurgeReport, *, apply: bool) -> None:
+def _keep_copy(report: PurgeReport, backup: Path) -> None:
+    report.kept_backups.append(str(backup))
+
+
+def _remember_backup(report: PurgeReport, backup: Path, store: str) -> None:
+    _keep_copy(report, backup)
+    if store not in report.incomplete:
+        report.incomplete.append(store)
+
+
+def _finish_text_copy(
+    path: Path,
+    backup: Path,
+    original: str,
+    report: PurgeReport,
+    *,
+    home: Path,
+    store: str,
+    keep_backups: bool,
+) -> bool:
+    try:
+        current = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        _remember_backup(report, backup, store)
+        _fail(report, home, f"{store}:verify")
+        return False
+    if not text_rewrite_ok(original, current):
+        try:
+            restore_file(backup, path)
+        except OSError:
+            pass
+        _remember_backup(report, backup, store)
+        _fail(report, home, f"{store}:verify")
+        return False
+    if keep_backups:
+        _keep_copy(report, backup)
+        return True
+    if not secure_unlink(backup):
+        _remember_backup(report, backup, store)
+        _fail(report, home, f"{store}:backup_delete")
+        return False
+    report.safety_deleted += 1
+    return True
+
+
+def _sessions(home: Path, report: PurgeReport, *, apply: bool, keep_backups: bool) -> None:
     root = home / "sessions"
     files = 0
     if root.is_dir():
@@ -114,17 +173,33 @@ def _sessions(home: Path, report: PurgeReport, *, apply: bool) -> None:
             except OSError:
                 _fail(report, home, "sessions:io")
                 continue
-            if _rewrite_lines(path, report, apply=apply, home=home, code="sessions"):
+            if _rewrite_lines(
+                path, report, apply=apply, home=home, code="sessions",
+                keep_backups=keep_backups, preserve_stat=False,
+            ):
                 files += 1
     report.extra_lines.append(f"session_files={files}")
 
 
-def _rewrite_lines(path: Path, report: PurgeReport, *, apply: bool, home: Path, code: str) -> bool:
+def _rewrite_lines(
+    path: Path,
+    report: PurgeReport,
+    *,
+    apply: bool,
+    home: Path,
+    code: str,
+    keep_backups: bool,
+    preserve_stat: bool,
+) -> bool:
     try:
-        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        original = path.read_text(encoding="utf-8")
+        info = path.stat()
     except (OSError, UnicodeError):
         _fail(report, home, f"{code}:unreadable")
+        if code not in report.incomplete:
+            report.incomplete.append(code)
         return False
+    lines = original.splitlines(keepends=True)
     changed = False
     rewritten: list[str] = []
     for line in lines:
@@ -140,31 +215,49 @@ def _rewrite_lines(path: Path, report: PurgeReport, *, apply: bool, home: Path, 
         return False
     if not apply:
         return True
-    if _backup(home, path) is None:
+    backup = _backup(home, path)
+    if backup is None:
         _fail(report, home, f"{code}:backup")
+        if code not in report.incomplete:
+            report.incomplete.append(code)
         return False
     tmp = path.with_name(path.name + ".purge-tmp")
     try:
+        if CRASH_BEFORE_REPLACE:
+            raise RuntimeError("simulated crash before replace")
         tmp.write_text("".join(rewritten), encoding="utf-8")
-        os.chmod(tmp, 0o600)
+        mode = info.st_mode & 0o777 if preserve_stat else 0o600
+        os.chmod(tmp, mode)
         os.replace(tmp, path)
-    except OSError:
+        if preserve_stat:
+            os.chmod(path, mode)
+            try:
+                os.chown(path, info.st_uid, info.st_gid)
+            except OSError:
+                pass
+            now = path.stat()
+            if (now.st_mode & 0o777) != mode or now.st_uid != info.st_uid or now.st_gid != info.st_gid:
+                raise OSError("stat was not preserved")
+    except (OSError, RuntimeError):
         try:
             tmp.unlink()
         except OSError:
             pass
+        _remember_backup(report, backup, code)
         _fail(report, home, f"{code}:io")
+        return False
+    if not _finish_text_copy(path, backup, original, report, home=home, store=code, keep_backups=keep_backups):
         return False
     report.applied = True
     return True
 
 
 def _message_columns(
-    path: Path, report: PurgeReport, *, apply: bool, timeout: float, home: Path,
+    path: Path, report: PurgeReport, *, apply: bool, timeout: float, home: Path, keep_backups: bool,
 ) -> None:
     rows = _rewrite_message_db(
         path, report, apply=apply, timeout=timeout, home=home, label="messages",
-        include_withheld=False, include_admissions=False,
+        include_withheld=False, include_admissions=False, keep_backups=keep_backups,
     )
     report.extra_lines.append(f"message_rows={rows}")
 
@@ -179,6 +272,7 @@ def _rewrite_message_db(
     label: str,
     include_withheld: bool,
     include_admissions: bool,
+    keep_backups: bool,
 ) -> int:
     """Rewrite body columns and non-withheld display_metadata strings.
 
@@ -208,15 +302,36 @@ def _rewrite_message_db(
         report.replacements += len(item["hits"])
         report.kinds.update(hit.kind for hit in item["hits"])
     rows = len({item["rid"] for item in safe}) + len(admissions)
+    touched = len({item["rid"] for item in safe})
     if not apply or rows == 0:
-        return len({item["rid"] for item in safe})
-    if _backup(home, path) is None:
+        return touched
+    backup = _backup(home, path)
+    if backup is None:
         _fail(report, home, f"{label}:backup")
+        if label not in report.incomplete:
+            report.incomplete.append(label)
         return 0
     if not _apply_plans(path, safe, admissions, timeout, report, home, label):
+        _remember_backup(report, backup, label)
         return 0
+    if not database_rewrite_ok(path, backup):
+        try:
+            restore_file(backup, path)
+        except OSError:
+            pass
+        _remember_backup(report, backup, label)
+        _fail(report, home, f"{label}:verify")
+        return 0
+    if keep_backups:
+        _keep_copy(report, backup)
+    elif not secure_unlink(backup):
+        _remember_backup(report, backup, label)
+        _fail(report, home, f"{label}:backup_delete")
+        return 0
+    else:
+        report.safety_deleted += 1
     report.applied = True
-    return len({item["rid"] for item in safe})
+    return touched
 
 
 def _plan_message_rows(path: Path, timeout: float, *, include_withheld: bool) -> list[dict]:
@@ -402,7 +517,7 @@ def _redact_metadata(raw: str, *, include_withheld: bool) -> tuple[str | None, l
         return None, []
 
 
-def _hermes_backups(home: Path, report: PurgeReport, *, apply: bool, timeout: float) -> None:
+def _hermes_backups(home: Path, report: PurgeReport, *, apply: bool, timeout: float, keep_backups: bool) -> None:
     """Known Hermes v0.23.1 backup locations only.
 
     ``state-snapshots/**/state.db`` and ``state.db.pre-update-emergency-*.bak``
@@ -414,7 +529,7 @@ def _hermes_backups(home: Path, report: PurgeReport, *, apply: bool, timeout: fl
     for path in _snapshot_databases(home):
         if _rewrite_message_db(
             path, report, apply=apply, timeout=timeout, home=home, label="backups",
-            include_withheld=True, include_admissions=True,
+            include_withheld=True, include_admissions=True, keep_backups=keep_backups,
         ):
             sqlite_files += 1
         elif apply:
@@ -462,7 +577,7 @@ def _backup_zips(home: Path) -> list[Path]:
     return found
 
 
-def _vacuum(path: Path, report: PurgeReport, *, apply: bool, home: Path) -> None:
+def _vacuum(path: Path, report: PurgeReport, *, apply: bool, home: Path, keep_backups: bool) -> None:
     """Rebuild the live database so free pages are not in the new file.
 
     Refuses when another process has ``state.db`` or its WAL open, and when
@@ -484,13 +599,21 @@ def _vacuum(path: Path, report: PurgeReport, *, apply: bool, home: Path) -> None
     if opened:
         _fail(report, home, "state.db:open")
         report.extra_lines.append("vacuum=refused")
+        report.extra_lines.append("vacuum_next=hermes secret-remediation purge --vacuum")
+        if "vacuum" not in report.incomplete:
+            report.incomplete.append("vacuum")
         return
-    if _backup(home, path) is None:
+    backup = _backup(home, path)
+    if backup is None:
         _fail(report, home, "vacuum:backup")
         report.extra_lines.append("vacuum=refused")
+        if "vacuum" not in report.incomplete:
+            report.incomplete.append("vacuum")
         return
     conn = None
     try:
+        if CRASH_BEFORE_REPLACE:
+            raise sqlite3.OperationalError("simulated crash before vacuum")
         conn = sqlite3.connect(_sqlite_uri(path, "rw"), timeout=1, isolation_level=None)
         conn.execute("PRAGMA busy_timeout=200")
         conn.execute("PRAGMA secure_delete=ON")
@@ -502,9 +625,34 @@ def _vacuum(path: Path, report: PurgeReport, *, apply: bool, home: Path) -> None
         code = "state.db:locked" if "locked" in text or "busy" in text else "vacuum:sqlite"
         _fail(report, home, code)
         report.extra_lines.append("vacuum=refused")
+        report.extra_lines.append("vacuum_next=hermes secret-remediation purge --vacuum")
+        if "vacuum" not in report.incomplete:
+            report.incomplete.append("vacuum")
+        if database_rewrite_ok(path, backup) and not keep_backups:
+            secure_unlink(backup)
+        else:
+            _remember_backup(report, backup, "vacuum")
+        return
     finally:
         if conn is not None:
             conn.close()
+    if "vacuum=rebuilt" not in report.extra_lines:
+        return
+    if not database_rewrite_ok(path, backup):
+        try:
+            restore_file(backup, path)
+        except OSError:
+            pass
+        _remember_backup(report, backup, "vacuum")
+        _fail(report, home, "vacuum:verify")
+        return
+    if keep_backups:
+        _keep_copy(report, backup)
+    elif not secure_unlink(backup):
+        _remember_backup(report, backup, "vacuum")
+        _fail(report, home, "vacuum:backup_delete")
+    else:
+        report.safety_deleted += 1
 
 
 def _foreign_db_open(path: Path) -> bool | None:
@@ -539,12 +687,15 @@ def _foreign_db_open(path: Path) -> bool | None:
     return False
 
 
-def _shell_history(home: Path, report: PurgeReport, *, apply: bool) -> None:
+def _shell_history(home: Path, report: PurgeReport, *, apply: bool, keep_backups: bool) -> None:
     files = 0
     for path in _history_paths():
         if not path.is_file() or path.is_symlink():
             continue
-        if _rewrite_lines(path, report, apply=apply, home=home, code="shell_history"):
+        if _rewrite_lines(
+            path, report, apply=apply, home=home, code="shell_history",
+            keep_backups=keep_backups, preserve_stat=True,
+        ):
             files += 1
     report.extra_lines.append(f"shell_history_files={files}")
     report.extra_lines.append(

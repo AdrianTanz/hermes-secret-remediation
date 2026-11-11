@@ -166,9 +166,10 @@ def test_apply_replaces_the_three_stores_and_leaves_other_fields(hermes_home):
     assert meta["n"] == 1
     assert GITHUB not in meta["withheld_prompt"]
     assert "[secret:github_pat:" in meta["withheld_prompt"]
-    assert message["content"] == f"please use {GITHUB}"
-    assert message["api_content"] == f"please use {GITHUB}"
-    assert GITHUB in message["tool_calls"]
+    assert GITHUB not in message["content"]
+    assert "[secret:github_pat:" in message["content"]
+    assert GITHUB not in (message["api_content"] or "")
+    assert GITHUB not in (message["tool_calls"] or "")
     title = conn.execute("SELECT title FROM sessions WHERE id = 's1'").fetchone()["title"]
     assert title == GITHUB
     other = conn.execute("SELECT content FROM messages WHERE id = 2").fetchone()["content"]
@@ -190,13 +191,15 @@ def test_apply_replaces_the_three_stores_and_leaves_other_fields(hermes_home):
     assert entries[0]["pid"] == 1
     assert GITHUB not in entries[0]["argv"]
     assert ledger.stat().st_mode & 0o777 == 0o600
-    again_db = db.read_bytes()
     again_ledger = ledger.read_bytes()
     second = purge(hermes_home, apply=True)
     assert second.replacements == 0
-    assert not second.applied
-    assert db.read_bytes() == again_db
+    assert not second.failed
     assert ledger.read_bytes() == again_ledger
+    again = _read(db)
+    left = again.execute("SELECT content FROM messages WHERE id = 1").fetchone()["content"]
+    again.close()
+    assert GITHUB not in left
 
 
 def test_no_secret_apply_is_a_noop(hermes_home):
@@ -206,13 +209,11 @@ def test_no_secret_apply_is_a_noop(hermes_home):
         json.dumps([{"pid": 4, "purpose": "gateway", "argv": "hermes serve"}]) + "\n",
         encoding="utf-8",
     )
-    before_db = db.read_bytes()
     before_ledger = ledger.read_bytes()
     report = purge(hermes_home, apply=True)
     assert report.replacements == 0
-    assert not report.applied
     assert not report.failed
-    assert db.read_bytes() == before_db
+    assert "vacuum=rebuilt" in report.render(apply=True)
     assert ledger.read_bytes() == before_ledger
     assert load_incidents(hermes_home) == []
 
@@ -377,7 +378,7 @@ def test_cli_purge_dry_run_prints_counts_only(hermes_home, capsys):
     _build_db(hermes_home, secret=GITHUB)
     parser = argparse.ArgumentParser()
     setup_cli(parser)
-    args = parser.parse_args(["purge"])
+    args = parser.parse_args(["purge", "--dry-run"])
     assert handle_cli(args) == 0
     out = capsys.readouterr().out
     assert "dry-run" in out
