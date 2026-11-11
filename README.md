@@ -6,7 +6,7 @@ It is not another masking pack. Marketplace **secret-guard** takes keys in and r
 
 Author: AdrianTanz.
 
-Canonical repo, private until you approve a submission: [AdrianTanz/hermes-secret-remediation](https://github.com/AdrianTanz/hermes-secret-remediation).
+Repo: [AdrianTanz/hermes-secret-remediation](https://github.com/AdrianTanz/hermes-secret-remediation).
 
 ## What it does
 
@@ -129,7 +129,7 @@ cp -a . ~/.hermes/plugins/secret-remediation
 hermes plugins enable secret-remediation --no-allow-tool-override
 ```
 
-After the GitHub repo is public:
+Or install straight from GitHub:
 
 ```bash
 hermes plugins install AdrianTanz/hermes-secret-remediation --enable
