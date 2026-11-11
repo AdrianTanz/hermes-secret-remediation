@@ -34,7 +34,15 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     scan.add_argument("--path", action="append", default=None, help="Extra path. Repeatable.")
     scan.add_argument("--only-path", action="append", default=None, help="Replace the scan list. Repeatable.")
     scan.add_argument("--no-logs", action="store_true")
-    scan.add_argument("--no-sessions", action="store_true")
+    scan.add_argument(
+        "--no-sessions",
+        action="store_true",
+        help="Skip session files in the scan list. With --purge, also do not rewrite session JSONL.",
+    )
+    scan.add_argument("--no-messages", action="store_true", help="With --purge, do not rewrite message body columns.")
+    scan.add_argument("--no-shell-history", action="store_true", help="With --purge, do not rewrite bash, zsh, or fish history.")
+    scan.add_argument("--no-backups", action="store_true", help="With --purge, do not rewrite Hermes sqlite snapshots or emergency .bak files.")
+    scan.add_argument("--no-vacuum", action="store_true", help="With --purge, do not VACUUM state.db.")
     scan.add_argument("--diff", action="store_true", help="Also scan git diff, including staged")
     scan.add_argument("--show", default=None, help="Also stream git show for this revision")
     scan.add_argument("--git-history", action="store_true", help="Also scan recent git history of the workspace")
@@ -80,6 +88,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
             "cloud sync, and any other external backup, sessions.title, terminal "
             "scrollback, a secret split across two JSONL lines, and SSD remnants. "
             "A running shell can write its memory back over a history file on exit. "
+            "Close other shells first, or run `history -c` in them. "
             "If VACUUM is skipped because the database is open, the summary names "
             "vacuum as incomplete and the other stores still finish. Run "
             "`hermes secret-remediation purge --vacuum` when Hermes is not holding "
@@ -128,12 +137,12 @@ def _print_roots(home: Path, explicit: list[str] | None) -> str:
 
 
 def _print_purge(home: Path, args: argparse.Namespace, *, apply: bool, command: str) -> int:
-    # scan --no-sessions only drops session files from the scan list.
-    purge_sessions = True if command == "scan" else not bool(getattr(args, "no_sessions", False))
+    # ``command`` is scan or purge. Both honor the same --no-* flags.
+    del command
     report = purge(
         home,
         apply=apply,
-        sessions=purge_sessions,
+        sessions=not bool(getattr(args, "no_sessions", False)),
         messages=not bool(getattr(args, "no_messages", False)),
         vacuum=not bool(getattr(args, "no_vacuum", False)),
         shell_history=not bool(getattr(args, "no_shell_history", False)),

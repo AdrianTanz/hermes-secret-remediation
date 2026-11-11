@@ -21,7 +21,7 @@ Canonical repo, private until you approve a submission: [AdrianTanz/hermes-secre
 
 Writes happen by default. A blocked turn runs the same purge. `hermes secret-remediation purge` writes. `hermes secret-remediation purge --dry-run` prints counts and writes nothing. The report never prints the secret.
 
-By default it rewrites shell history and chat history. Shell history means files outside Hermes: `~/.bash_history`, `~/.zsh_history`, and `~/.local/share/fish/fish_history`. A running shell can write its in-memory history back over the file on exit. Chat history means the Hermes transcript columns below, plus every `$HERMES_HOME/sessions/**/*.jsonl` file, recursive, not only the top directory.
+By default it rewrites shell history and chat history. Shell history means files outside Hermes: `~/.bash_history`, `~/.zsh_history`, and `~/.local/share/fish/fish_history`. A running shell can write its in-memory history back over the file on exit. Close other shells first, or run `history -c` in them. Chat history means the Hermes transcript columns below, plus every `$HERMES_HOME/sessions/**/*.jsonl` file, recursive, not only the top directory. The same `--no-*` flags work on `scan --purge`.
 
 Opt out with `--no-sessions`, `--no-messages`, `--no-shell-history`, `--no-backups`, `--no-vacuum`. `--keep-backups` leaves the safety copy. The same switches are plugin settings `purge_sessions`, `purge_messages`, `purge_shell_history`, `purge_backups`, `purge_vacuum`, `keep_backups`, and env `SECRET_REMEDIATION_NO_SESSIONS`, `SECRET_REMEDIATION_NO_MESSAGES`, `SECRET_REMEDIATION_NO_SHELL_HISTORY`, `SECRET_REMEDIATION_NO_BACKUPS`, `SECRET_REMEDIATION_NO_VACUUM`, `SECRET_REMEDIATION_KEEP_BACKUPS`.
 
@@ -32,7 +32,7 @@ What is deleted, unless you opt out:
 - `spawn-ledger.json` `argv`
 - `messages.content`, `messages.api_content`, `messages.tool_calls`, and the other `display_metadata` strings. This is separate from `/retry` of a blocked turn. A replayed tool call sends the placeholder in its arguments, because Hermes re-reads the input from `tool_calls`. Resume and compaction see that same placeholder. `sessions.title` is not rewritten.
 - `$HERMES_HOME/sessions/**/*.jsonl`, one line at a time. A secret split across two lines stays.
-- `~/.bash_history` (including `#timestamp` lines left intact), zsh extended history (`: timestamp:duration;command`), and fish history (`- cmd:` / `when:`). Permissions and ownership are kept.
+- `~/.bash_history` (including `#timestamp` lines left intact), zsh extended history (`: timestamp:duration;command`), and fish history (`- cmd:` / `when:`). Permissions, ownership, and mtime are kept.
 - `state-snapshots/**/state.db` and `state.db.pre-update-emergency-*.bak`
 - Free pages in the live `state.db`, by `PRAGMA secure_delete` on this connection only and then `VACUUM`, when the database and its WAL are not open. If they are open, that store is named `incomplete=vacuum` and the others still finish. Run `hermes secret-remediation purge --vacuum` when Hermes is not holding the file. The refusal is also retried later. Later Hermes writes do not inherit `secure_delete`.
 

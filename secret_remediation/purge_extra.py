@@ -1,4 +1,4 @@
-"""Opt-in purge targets. Dry-run unless ``apply`` is set.
+"""Extra purge targets. They run by default. ``apply=False`` only previews.
 
 Each rewrite copies the file into the plugin backup directory first. A failed
 backup or a locked database does not modify the original. Provider logs are
@@ -235,8 +235,14 @@ def _rewrite_lines(
                 os.chown(path, info.st_uid, info.st_gid)
             except OSError:
                 pass
+            os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns))
             now = path.stat()
-            if (now.st_mode & 0o777) != mode or now.st_uid != info.st_uid or now.st_gid != info.st_gid:
+            if (
+                (now.st_mode & 0o777) != mode
+                or now.st_uid != info.st_uid
+                or now.st_gid != info.st_gid
+                or now.st_mtime_ns != info.st_mtime_ns
+            ):
                 raise OSError("stat was not preserved")
     except (OSError, RuntimeError):
         try:
@@ -699,7 +705,7 @@ def _shell_history(home: Path, report: PurgeReport, *, apply: bool, keep_backups
             files += 1
     report.extra_lines.append(f"shell_history_files={files}")
     report.extra_lines.append(
-        "shell_history_warning=a running shell can write its in-memory history back over the file on exit"
+        "shell_history_warning=a running shell can write its in-memory history back over the file on exit; close other shells first, or run history -c in them"
     )
 
 

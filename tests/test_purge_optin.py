@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sqlite3
@@ -8,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from secret_remediation.cli import handle_cli, setup_cli
 from secret_remediation.incidents import load_incidents
 from secret_remediation.purge import purge
 from tests.fakes import GITHUB
@@ -272,6 +274,8 @@ def test_shell_formats_and_permissions_are_preserved(hermes_home):
     os.chmod(bash, 0o640)
     os.chmod(zsh, 0o600)
     os.chmod(fish, 0o640)
+    for path in (bash, zsh, fish):
+        os.utime(path, (1_600_000_000, 1_600_000_000))
     before = {path: path.stat() for path in (bash, zsh, fish)}
     report = purge(hermes_home, messages=False, vacuum=False, sessions=False, backups=False)
     assert report.failed is False
@@ -289,6 +293,7 @@ def test_shell_formats_and_permissions_are_preserved(hermes_home):
         assert now.st_mode & 0o777 == info.st_mode & 0o777
         assert now.st_uid == info.st_uid
         assert now.st_gid == info.st_gid
+        assert now.st_mtime_ns == info.st_mtime_ns
     shown = report.render(apply=True)
     assert "outside" not in shown or GITHUB not in shown
     assert GITHUB not in shown
@@ -330,6 +335,90 @@ def test_env_opt_out_skips_sessions(hermes_home, monkeypatch):
     report = purge(hermes_home, messages=False, vacuum=False, shell_history=False, backups=False)
     assert GITHUB in path.read_text(encoding="utf-8")
     assert "session_files=" not in report.render(apply=True)
+
+
+def _scan_purge(only: Path, *flags: str) -> int:
+    parser = argparse.ArgumentParser()
+    setup_cli(parser)
+    args = parser.parse_args(["scan", "--only-path", str(only), "--purge", *flags])
+    return handle_cli(args)
+
+
+def _message_text(path: Path) -> tuple[str, str, str, str]:
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    row = conn.execute("SELECT content, api_content, tool_calls, display_metadata FROM messages").fetchone()
+    conn.close()
+    return tuple(row)
+
+
+def test_scan_purge_no_sessions_leaves_jsonl_bytes(hermes_home, tmp_path):
+    only = tmp_path / "only"
+    only.mkdir()
+    session = hermes_home / "sessions" / "nested" / "one.jsonl"
+    session.parent.mkdir(parents=True)
+    session.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    before = session.read_bytes()
+    history = Path.home() / ".bash_history"
+    history.write_text(f"echo {GITHUB}\n", encoding="utf-8")
+    assert _scan_purge(only, "--no-sessions") == 0
+    assert session.read_bytes() == before
+    assert GITHUB not in history.read_text(encoding="utf-8")
+
+
+def test_scan_purge_no_messages_leaves_body_columns(hermes_home, tmp_path):
+    only = tmp_path / "only"
+    only.mkdir()
+    db = hermes_home / "state.db"
+    _db(db, secret=GITHUB)
+    before = _message_text(db)
+    session = hermes_home / "sessions" / "one.jsonl"
+    session.parent.mkdir()
+    session.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    assert _scan_purge(only, "--no-messages") == 0
+    assert _message_text(db) == before
+    assert GITHUB not in session.read_text(encoding="utf-8")
+
+
+def test_scan_purge_no_shell_history_leaves_the_file(hermes_home, tmp_path):
+    only = tmp_path / "only"
+    only.mkdir()
+    history = Path.home() / ".zsh_history"
+    history.write_text(f": 1690000000:0;echo {GITHUB}\n", encoding="utf-8")
+    before = history.read_bytes()
+    session = hermes_home / "sessions" / "one.jsonl"
+    session.parent.mkdir()
+    session.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    assert _scan_purge(only, "--no-shell-history") == 0
+    assert history.read_bytes() == before
+    assert GITHUB not in session.read_text(encoding="utf-8")
+
+
+def test_scan_purge_no_backups_leaves_the_snapshot(hermes_home, tmp_path):
+    only = tmp_path / "only"
+    only.mkdir()
+    snap = hermes_home / "state-snapshots" / "pre" / "state.db"
+    _db(snap, secret=GITHUB)
+    before = snap.read_bytes()
+    session = hermes_home / "sessions" / "one.jsonl"
+    session.parent.mkdir()
+    session.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    assert _scan_purge(only, "--no-backups") == 0
+    assert snap.read_bytes() == before
+    assert GITHUB not in session.read_text(encoding="utf-8")
+
+
+def test_scan_purge_no_vacuum_leaves_state_db_bytes(hermes_home, tmp_path):
+    only = tmp_path / "only"
+    only.mkdir()
+    db = hermes_home / "state.db"
+    _db(db, secret=None)
+    before = db.read_bytes()
+    session = hermes_home / "sessions" / "one.jsonl"
+    session.parent.mkdir()
+    session.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    assert _scan_purge(only, "--no-vacuum") == 0
+    assert db.read_bytes() == before
+    assert GITHUB not in session.read_text(encoding="utf-8")
 
 
 def test_provider_line_names_the_kind_and_not_the_value(hermes_home):

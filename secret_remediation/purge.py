@@ -28,8 +28,8 @@ from secret_remediation.paths import hermes_home
 from secret_remediation.redact import redact_text
 
 # Hermes writes the withheld prompt after the hook returns. The background
-# pass covers about a second and a half, then stops. ``purge --apply`` is the
-# later manual pass.
+# pass covers about a second and a half, then stops. ``hermes secret-remediation purge``
+# is the later manual pass. It writes unless ``--dry-run``.
 RETRY_DELAYS = (0.0, 0.05, 0.15, 0.40, 0.90)
 # Tried after the short pass when VACUUM was refused because Hermes still holds state.db.
 VACUUM_RETRY_DELAYS = (2.0, 5.0, 15.0)
