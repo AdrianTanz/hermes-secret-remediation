@@ -11,6 +11,8 @@ HELP = """\
 /secret-incident                 list incidents (fingerprints only)
 /secret-incident scan            scan the workspace, logs and session history
 /secret-incident scan <path>     scan one extra path
+/secret-incident purge           count secrets in Hermes state (no writes)
+/secret-incident purge apply     rewrite those stores
 /secret-incident <id>            one incident and rotation advice
 /secret-incident advice          rotation and git-history advice
 /secret-incident advice <kind>
@@ -45,6 +47,11 @@ def secret_incident(raw_args: str = "", **kwargs: object) -> str:
         findings = scan_roots(roots, home=home)
         record_findings(findings, home)
         return format_report(findings, heading="secret-remediation scan")
+    if parts[0] == "purge":
+        from secret_remediation.purge import purge
+
+        report = purge(home, apply=len(parts) > 1 and parts[1] == "apply")
+        return report.render(apply=len(parts) > 1 and parts[1] == "apply")
     if parts[0] == "advice":
         kind = parts[1] if len(parts) > 1 else None
         return advice_for(kind)

@@ -146,7 +146,7 @@ def test_register_matches_manifest():
             self.cli.append(name)
 
         def register_command(self, name, handler, description="", args_hint=""):
-            self.commands.append(name)
+            self.commands.append((name, args_hint))
 
     ctx = Ctx()
     register(ctx)
@@ -159,6 +159,6 @@ def test_register_matches_manifest():
     assert ctx.hooks == declared
     assert ctx.hold["transform_llm_output"] is True
     assert ctx.cli == ["secret-remediation"]
-    assert ctx.commands == ["secret-incident"]
+    assert ctx.commands == [("secret-incident", "[scan|purge|id|advice|list]")]
     assert ctx.patterns
     assert "redact_text" not in Path(__file__).resolve().parents[1].joinpath("__init__.py").read_text()

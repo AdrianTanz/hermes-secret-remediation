@@ -8,11 +8,29 @@ from tests.fakes import assert_clean
 
 
 @pytest.fixture(autouse=True)
+def fast_purge_retries(monkeypatch):
+    monkeypatch.setattr("secret_remediation.purge.RETRY_DELAYS", (0.0, 0.01))
+    monkeypatch.setattr("secret_remediation.purge.VACUUM_RETRY_DELAYS", ())
+
+
+@pytest.fixture(autouse=True)
 def hermes_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes"
     home.mkdir()
+    login = tmp_path / "login"
+    login.mkdir()
     monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("HOME", str(login))
     monkeypatch.delenv("TERMINAL_CWD", raising=False)
+    for name in (
+        "SECRET_REMEDIATION_NO_SESSIONS",
+        "SECRET_REMEDIATION_NO_MESSAGES",
+        "SECRET_REMEDIATION_NO_SHELL_HISTORY",
+        "SECRET_REMEDIATION_NO_BACKUPS",
+        "SECRET_REMEDIATION_NO_VACUUM",
+        "SECRET_REMEDIATION_KEEP_BACKUPS",
+    ):
+        monkeypatch.delenv(name, raising=False)
     return home
 
 
@@ -28,6 +46,9 @@ def no_secret_in_output(capsys):
     root = logging.getLogger()
     root.addHandler(handler)
     yield
+    from secret_remediation.purge import flush_purges
+
+    flush_purges()
     root.removeHandler(handler)
     captured = capsys.readouterr()
     assert_clean(captured.out)

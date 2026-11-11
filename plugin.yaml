@@ -1,7 +1,7 @@
 name: secret-remediation
 version: 0.1.0
 description: After a credential has already leaked into Hermes or git, contain it and guide rotation. Fingerprints only. Not another masking pack.
-author: Adrian Tanz
+author: AdrianTanz
 license: MIT
 homepage: https://github.com/AdrianTanz/hermes-secret-remediation
 requires_hermes: ">=0.22.0"
@@ -24,3 +24,27 @@ config_schema:
     type: boolean
     default: true
     description: "Include session files and state.db unless the operator passes --no-sessions."
+  purge_sessions:
+    type: boolean
+    default: true
+    description: "Rewrite session JSONL during purge. Set false or pass --no-sessions to skip."
+  purge_messages:
+    type: boolean
+    default: true
+    description: "Rewrite message content, api_content, tool_calls, and display_metadata during purge. Set false or pass --no-messages to skip."
+  purge_shell_history:
+    type: boolean
+    default: true
+    description: "Rewrite bash, zsh, and fish history files outside Hermes during purge. Set false or pass --no-shell-history to skip."
+  purge_backups:
+    type: boolean
+    default: true
+    description: "Rewrite Hermes state-snapshots and emergency .bak files during purge. Set false or pass --no-backups to skip. Zip archives are never rewritten."
+  purge_vacuum:
+    type: boolean
+    default: true
+    description: "VACUUM state.db during purge when it is not open elsewhere. Set false or pass --no-vacuum to skip."
+  keep_backups:
+    type: boolean
+    default: false
+    description: "Keep safety copies after a verified rewrite. Default is to delete them. Pass --keep-backups to keep them."
