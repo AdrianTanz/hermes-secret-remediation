@@ -1,14 +1,21 @@
-# Demo storyboard
+# Demo recording
 
-90 seconds. Detect, then contain, then tell the operator to rotate. Use only the synthetic token from `tests/fakes.py`. Do not let the characters stay readable on screen.
+73.5 seconds. 1080p. The tape is `demo/demo.tape`. `demo/render.sh` builds `demo/secret-remediation-demo.mp4`.
 
-| Time | Picture | Say |
-| --- | --- | --- |
-| 0–10s | Title: secret-remediation. One line under it: after the leak, not another masker. | secret-guard already stops a key on the way in. This is for the key that is already in the chat or the repo. |
-| 10–28s | Paste the fake token into Hermes. The reply is the block: type, fingerprint, last 4, "rotate it first", "I have not sent this turn to the model." | Detect. The turn never reaches the model. Masking this later does not un-leak it. Rotate first. |
-| 28–46s | A file read whose output contained the same fake token. The tool result on screen is `[secret:github_pat:…]`. | Contain. Tool output, terminal output, and the reply are rewritten, and the stream is held until that rewrite exists. |
-| 46–64s | `/secret-incident`, then `/secret-incident advice github_pat`. The advice is the GitHub checklist and the filter-repo text. | Guide. The checklist is text. The plugin does not call GitHub, does not rewrite history, and does not push. |
-| 64–80s | `hermes secret-remediation scan` on a fixture with a fake `agent.log` line and a one-line session JSONL. Output is fingerprints and paths. | The default scan is the workspace, `$HERMES_HOME/logs`, and session history. Those files are streamed. Only the fingerprint comes out. |
-| 80–90s | `hermes cron list` showing `secret-remediation-scan`, no-agent, script `secret-remediation-scan.sh`. | The schedule is Hermes cron with no model call. End card: AdrianTanz. |
+Throwaway home only: `/tmp/sr-demo`. The only credential is `GITHUB` from `tests/fakes.py`. It is never typed and never printed. The screen shows a fingerprint and the last 4 characters.
 
-Total: 90 seconds.
+Recorded against `80d4499`. The opt-out is plain `purge --no-sessions`, not `scan --purge`.
+
+| Time | Picture |
+| --- | --- |
+| 0:00–0:03 | Title. secret-remediation. after the leak, not another masker. |
+| 0:03–0:07 | `HOME=/tmp/sr-demo/home` and `HERMES_HOME` under that same tree. |
+| 0:07–0:15 | Detect. `pre_llm_call` blocks. Fingerprint, last 4, rotate first, "I have not sent this turn to the model." Tool result is `[secret:github_pat:…]`. |
+| 0:15–0:22 | Scan of the throwaway session and `state.db`. Two findings. Values are not shown. |
+| 0:22–0:31 | `purge` with no flags. Report says `applied`, `safety_copies_deleted=4`, and `copies=0`. |
+| 0:31–0:40 | Re-seed off screen, then `purge --dry-run`. Hashes match. `unchanged=yes`. |
+| 0:40–0:49 | `purge --no-sessions`. Session stays (`jsonl=yes`). `state.db` and shell history are cleared. |
+| 0:49–0:55 | Scan still finds the one session line the opt-out left. |
+| 0:55–1:01 | `purge` with no flags clears that session. `safety_copies_deleted=2`. |
+| 1:01–1:09 | Re-scan. No credential material found. `copies=0`. |
+| 1:09–1:13.5 | End card. Rotate first. @NousResearch. AdrianTanz. |
