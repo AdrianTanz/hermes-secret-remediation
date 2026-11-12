@@ -123,7 +123,7 @@ cp -a . ~/.hermes/plugins/secret-remediation
 hermes plugins enable secret-remediation --no-allow-tool-override
 ```
 
-After the GitHub repo is public:
+Or install straight from GitHub:
 
 ```bash
 hermes plugins install AdrianTanz/hermes-secret-remediation --enable
