@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 from secret_remediation.incidents import record_hits
-from secret_remediation.purge import schedule_purge
+from secret_remediation.paths import hermes_home
 from secret_remediation.redact import PublicHit, redact_text
 
 FAIL_CLOSED = (
@@ -52,7 +52,13 @@ def _safe_location(label: str) -> str:
 
 def _record(hits: list[PublicHit], source: str, location: str, session_id: str) -> None:
     if hits:
-        record_hits(hits, source=source, location=location, session_id=session_id)
+        record_hits(
+            hits,
+            source=source,
+            location=location,
+            session_id=session_id,
+            home=hermes_home(),
+        )
 
 
 def _line(hit: PublicHit, where: str) -> str:
@@ -63,7 +69,7 @@ def _line(hit: PublicHit, where: str) -> str:
     )
 
 
-def _summarize(hits: list[PublicHit], where: str) -> str:
+def _summarize(hits: list[PublicHit], where: str, session_id: str = "") -> str:
     lines = [
         "Masking does not revoke a credential. If it already reached a model, "
         "a pushed git object, or a sent chat, rotate it first.",
@@ -78,10 +84,16 @@ def _summarize(hits: list[PublicHit], where: str) -> str:
         "This plugin will not revoke it, rewrite git history, or push. "
         "Details: /secret-incident"
     )
+    shown, id_hits = redact_text(session_id) if session_id else ("", [])
+    delete_id = shown if id_hits else session_id
+    if delete_id:
+        delete = f"For this session, run `hermes sessions delete {delete_id}`."
+    else:
+        delete = "For a session that already holds the credential, run `hermes sessions delete <id>`."
     lines.append(
-        "A local purge rewrites Hermes chat history and shell history by default. "
-        "A replayed tool call sends the placeholder, because Hermes re-reads tool_calls. "
-        "That does not remove provider logs."
+        "This plugin does not rewrite state.db, spawn-ledger.json, or snapshot databases. "
+        + delete
+        + " That does not remove provider logs."
     )
     return "\n".join(lines)
 
@@ -95,11 +107,10 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
             hits.extend(found)
         if not hits:
             return None
-        _record(hits, "pre_llm_call", "user_message", _session(kwargs))
-        schedule_purge()
-        return {"action": "block", "message": _summarize(hits, "this message")}
+        session = _session(kwargs)
+        _record(hits, "pre_llm_call", "user_message", session)
+        return {"action": "block", "message": _summarize(hits, "this message", session)}
     except Exception:
-        schedule_purge()
         return {"action": "block", "message": FAIL_CLOSED}
 
 
@@ -114,11 +125,10 @@ def on_pre_tool_call(**kwargs: Any) -> dict[str, str] | None:
         if not hits:
             return None
         location = _safe_location(f"tool:{tool_name}")
-        _record(hits, "pre_tool_call", location, _session(kwargs))
-        schedule_purge()
-        return {"action": "block", "message": _summarize(hits, "the tool arguments")}
+        session = _session(kwargs)
+        _record(hits, "pre_tool_call", location, session)
+        return {"action": "block", "message": _summarize(hits, "the tool arguments", session)}
     except Exception:
-        schedule_purge()
         return {"action": "block", "message": FAIL_CLOSED}
 
 

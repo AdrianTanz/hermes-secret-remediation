@@ -155,21 +155,25 @@ def test_apply_replaces_the_three_stores_and_leaves_other_fields(hermes_home):
         ),
         encoding="utf-8",
     )
-    report = purge(hermes_home, apply=True)
-    assert report.applied
+    before_db = db.read_bytes()
+    before_ledger = ledger.read_bytes()
+    report = purge(hermes_home, apply=True, messages=True, vacuum=True, backups=True, sessions=True)
+    assert not report.applied
     assert not report.failed
-    assert report.render(apply=True).startswith("secret-remediation purge (applied)")
+    text = report.render(apply=True)
+    assert text.startswith("secret-remediation purge (unchanged)")
+    assert "state_db=not_rewritten" in text
+    assert "delete=hermes sessions delete s1" in text
+    assert GITHUB not in text
+    assert db.read_bytes() == before_db
+    assert ledger.read_bytes() == before_ledger
     conn = _read(db)
     message = conn.execute("SELECT content, api_content, tool_calls, display_metadata FROM messages WHERE id = 1").fetchone()
     meta = json.loads(message["display_metadata"])
     assert meta["keep"] == "plain"
     assert meta["n"] == 1
-    assert GITHUB not in meta["withheld_prompt"]
-    assert "[secret:github_pat:" in meta["withheld_prompt"]
-    assert GITHUB not in message["content"]
-    assert "[secret:github_pat:" in message["content"]
-    assert GITHUB not in (message["api_content"] or "")
-    assert GITHUB not in (message["tool_calls"] or "")
+    assert GITHUB in meta["withheld_prompt"]
+    assert GITHUB in message["content"]
     title = conn.execute("SELECT title FROM sessions WHERE id = 's1'").fetchone()["title"]
     assert title == GITHUB
     other = conn.execute("SELECT content FROM messages WHERE id = 2").fetchone()["content"]
@@ -177,8 +181,7 @@ def test_apply_replaces_the_three_stores_and_leaves_other_fields(hermes_home):
     dirty = conn.execute("SELECT payload_json, payload_digest, status, intent FROM session_admissions WHERE admission_id = 'adm-1'").fetchone()
     payload = json.loads(dirty["payload_json"])
     assert payload["note"] == "keep-me"
-    assert GITHUB not in dirty["payload_json"]
-    assert dirty["payload_digest"] == admission_digest("s1", payload, "queue")
+    assert GITHUB in dirty["payload_json"]
     assert dirty["status"] == "queued"
     clean = conn.execute("SELECT payload_json, payload_digest FROM session_admissions WHERE admission_id = 'adm-2'").fetchone()
     assert clean["payload_digest"] == "digest-2"
@@ -189,17 +192,17 @@ def test_apply_replaces_the_three_stores_and_leaves_other_fields(hermes_home):
     assert entries[1] == {"pid": 2, "purpose": "gateway", "argv": "hermes serve --port 9119"}
     assert entries[0]["purpose"] == "cli"
     assert entries[0]["pid"] == 1
-    assert GITHUB not in entries[0]["argv"]
-    assert ledger.stat().st_mode & 0o777 == 0o600
+    assert GITHUB in entries[0]["argv"]
     again_ledger = ledger.read_bytes()
     second = purge(hermes_home, apply=True)
-    assert second.replacements == 0
+    assert second.replacements == report.replacements
+    assert not second.applied
     assert not second.failed
     assert ledger.read_bytes() == again_ledger
     again = _read(db)
     left = again.execute("SELECT content FROM messages WHERE id = 1").fetchone()["content"]
     again.close()
-    assert GITHUB not in left
+    assert GITHUB in left
 
 
 def test_no_secret_apply_is_a_noop(hermes_home):
@@ -213,7 +216,8 @@ def test_no_secret_apply_is_a_noop(hermes_home):
     report = purge(hermes_home, apply=True)
     assert report.replacements == 0
     assert not report.failed
-    assert "vacuum=rebuilt" in report.render(apply=True)
+    assert "state_db=not_rewritten" in report.render(apply=True)
+    assert "vacuum=rebuilt" not in report.render(apply=True)
     assert ledger.read_bytes() == before_ledger
     assert load_incidents(hermes_home) == []
 
@@ -231,10 +235,12 @@ def test_apply_waits_for_a_writer_and_keeps_the_unrelated_update(hermes_home):
         conn.commit()
         conn.close()
 
-    threading.Thread(target=holder).start()
+    worker = threading.Thread(target=holder)
+    worker.start()
     assert ready.wait(5)
     report = purge(hermes_home, apply=True, timeout=2.0)
-    assert report.applied
+    worker.join(2)
+    assert not report.applied
     assert not report.failed
     conn = _read(db)
     kept = conn.execute("SELECT content FROM messages WHERE id = 2").fetchone()["content"]
@@ -242,7 +248,7 @@ def test_apply_waits_for_a_writer_and_keeps_the_unrelated_update(hermes_home):
         conn.execute("SELECT display_metadata FROM messages WHERE id = 1").fetchone()["display_metadata"]
     )["withheld_prompt"]
     assert kept == "sentinel-kept"
-    assert GITHUB not in prompt
+    assert GITHUB in prompt
     assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     conn.close()
 
@@ -263,11 +269,12 @@ def test_locked_database_fails_closed_without_a_partial_write(hermes_home):
 
     threading.Thread(target=holder).start()
     assert ready.wait(5)
-    report = purge(hermes_home, apply=True, timeout=0.2)
-    assert report.failed
+    try:
+        report = purge(hermes_home, apply=True, timeout=0.2)
+    finally:
+        release.set()
     assert not report.applied
-    assert "state.db:locked" in report.failure
-    release.set()
+    assert GITHUB.encode() in db.read_bytes()
     conn = _read(db)
     prompt = json.loads(
         conn.execute("SELECT display_metadata FROM messages WHERE id = 1").fetchone()["display_metadata"]
@@ -306,10 +313,12 @@ def test_profile_root_ledger_is_included(tmp_path, monkeypatch):
     other = tmp_path / "elsewhere" / "spawn-ledger.json"
     other.parent.mkdir()
     other.write_text(json.dumps([{"pid": 3, "argv": GITHUB}]), encoding="utf-8")
-    assert machine in ledger_paths(home)
+    assert machine not in ledger_paths(home)
+    assert ledger_paths(home) == [home / "spawn-ledger.json"]
+    before = machine.read_bytes()
     report = purge(home, apply=True)
-    assert report.ledger_entries == 1
-    assert GITHUB not in machine.read_text(encoding="utf-8")
+    assert report.ledger_entries == 0
+    assert machine.read_bytes() == before
     assert GITHUB in other.read_text(encoding="utf-8")
 
 
@@ -325,8 +334,10 @@ def test_scheduled_purge_catches_a_late_withheld_prompt(hermes_home, monkeypatch
         conn.commit()
         conn.close()
 
-    threading.Thread(target=writer).start()
+    worker = threading.Thread(target=writer)
+    worker.start()
     schedule_purge(hermes_home)
+    worker.join(2)
     from secret_remediation.purge import flush_purges
 
     flush_purges(2)
@@ -335,8 +346,8 @@ def test_scheduled_purge_catches_a_late_withheld_prompt(hermes_home, monkeypatch
         conn.execute("SELECT display_metadata FROM messages WHERE id = 1").fetchone()["display_metadata"]
     )["withheld_prompt"]
     conn.close()
-    assert GITHUB not in prompt
-    assert "[secret:github_pat:" in prompt
+    assert GITHUB in prompt
+    assert "[secret:github_pat:" not in prompt
 
 
 def test_block_schedules_a_purge(hermes_home):
@@ -344,6 +355,8 @@ def test_block_schedules_a_purge(hermes_home):
     result = on_pre_llm_call(user_message=f"please use {GITHUB}", session_id="s1")
     assert result["action"] == "block"
     assert "provider logs" in result["message"]
+    assert "hermes sessions delete" in result["message"]
+    assert "schedule_purge" not in Path("secret_remediation/hooks.py").read_text(encoding="utf-8")
     from secret_remediation.purge import flush_purges
 
     flush_purges(2)
@@ -352,10 +365,7 @@ def test_block_schedules_a_purge(hermes_home):
         conn.execute("SELECT display_metadata FROM messages WHERE id = 1").fetchone()["display_metadata"]
     )["withheld_prompt"]
     conn.close()
-    assert GITHUB not in prompt
-    masked, hits = redact_text(prompt)
-    assert hits == []
-    assert masked == prompt
+    assert GITHUB in prompt
 
 
 def test_worker_records_a_failure_without_the_secret(hermes_home, monkeypatch):
@@ -366,11 +376,9 @@ def test_worker_records_a_failure_without_the_secret(hermes_home, monkeypatch):
     from secret_remediation.purge import flush_purges
 
     flush_purges(2)
+    assert ledger.read_bytes() == b"{not-json"
     rows = load_incidents(hermes_home)
-    assert len(rows) == 1
-    assert rows[0]["kind"] == "purge_failed"
-    assert rows[0]["location"] == "spawn-ledger.json:corrupt"
-    assert rows[0]["fingerprint"] == ""
+    assert rows == []
     assert GITHUB not in json.dumps(rows)
 
 

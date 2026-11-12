@@ -7,9 +7,9 @@ Operator checks for this plugin. Paths below are Hermes homes, not a build machi
 - [x] Detects a credential in the user message, tool arguments, tool output, terminal output, and model output
 - [x] `pre_llm_call` and `pre_tool_call` block, and a scanner error fails closed
 - [x] Incidents store a kind, a fingerprint, and the last 4 characters. The value is not in the incident line
-- [x] After a block, a purge tries to replace the value in `state.db` `messages.display_metadata.withheld_prompt`, `state.db` `session_admissions.payload_json`, and `spawn-ledger.json` `argv`
-- [x] `hermes secret-remediation purge` and `scan --purge` print counts only. `--apply` rewrites those stores
-- [x] The purge does not remove provider logs, backups, shell history, session JSONL, or other database columns
+- [x] A block does not purge. `state.db`, `spawn-ledger.json`, snapshot databases, and session JSONL are never written
+- [x] `hermes secret-remediation purge` reports session ids and `hermes sessions delete`. `--shell-history` is the only write, and it is off unless named
+- [x] The purge does not remove provider logs, zip backups, or Hermes-owned stores
 
 ## Tests
 

@@ -1,4 +1,4 @@
-"""Which purge targets are on. Default is on unless config, env, or a flag says otherwise."""
+"""Which purge targets are on. Every write target is off unless the CLI names it."""
 
 from __future__ import annotations
 
@@ -40,16 +40,10 @@ def resolve_targets(
         "vacuum": vacuum,
     }
     chosen: dict[str, bool] = {}
-    for key, setting_key, env_name in _FLAGS:
-        if explicit[key] is not None:
-            chosen[key] = bool(explicit[key])
-            continue
-        enabled = True
-        if setting_key in settings and settings[setting_key] is False:
-            enabled = False
-        if _env_off(env_name):
-            enabled = False
-        chosen[key] = enabled
+    for key, _setting_key, _env_name in _FLAGS:
+        # Config and env cannot enable a write. Only an explicit True does,
+        # and purge() still refuses every Hermes-owned target.
+        chosen[key] = explicit[key] is True
     if keep_backups is not None:
         chosen["keep_backups"] = bool(keep_backups)
     else:

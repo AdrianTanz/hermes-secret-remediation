@@ -26,25 +26,25 @@ config_schema:
     description: "Include session files and state.db unless the operator passes --no-sessions."
   purge_sessions:
     type: boolean
-    default: true
-    description: "Rewrite session JSONL during purge. Set false or pass --no-sessions to skip."
+    default: false
+    description: "Ignored. Session JSONL is never rewritten. Use hermes sessions delete."
   purge_messages:
     type: boolean
-    default: true
-    description: "Rewrite message content, api_content, tool_calls, and display_metadata during purge. Set false or pass --no-messages to skip."
+    default: false
+    description: "Ignored. state.db message columns are never rewritten."
   purge_shell_history:
     type: boolean
-    default: true
-    description: "Rewrite bash, zsh, and fish history files outside Hermes during purge. Set false or pass --no-shell-history to skip."
+    default: false
+    description: "Off. Shell history is rewritten only when the CLI passes --shell-history. Config cannot turn it on."
   purge_backups:
     type: boolean
-    default: true
-    description: "Rewrite Hermes state-snapshots and emergency .bak files during purge. Set false or pass --no-backups to skip. Zip archives are never rewritten."
+    default: false
+    description: "Ignored. Snapshot databases and emergency .bak files are never rewritten."
   purge_vacuum:
     type: boolean
-    default: true
-    description: "VACUUM state.db during purge when it is not open elsewhere. Set false or pass --no-vacuum to skip."
+    default: false
+    description: "Ignored. state.db is never vacuumed."
   keep_backups:
     type: boolean
     default: false
-    description: "Keep safety copies after a verified rewrite. Default is to delete them. Pass --keep-backups to keep them."
+    description: "With --shell-history, keep the safety copy. Pass --keep-backups."
