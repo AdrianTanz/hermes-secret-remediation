@@ -12,7 +12,19 @@ DEFAULT_SCHEDULE = "0 3 * * *"
 
 
 def hermes_home() -> Path:
-    """Profile home. ``HERMES_HOME`` wins, otherwise ``~/.hermes``."""
+    """Resolve the profile home with ``hermes_constants.get_hermes_home()``.
+
+    Hooks call this and pass the result into every write. When that function
+    is not importable, ``HERMES_HOME`` wins, otherwise ``~/.hermes``.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+
+        resolved = get_hermes_home()
+        if resolved:
+            return Path(resolved).expanduser().resolve()
+    except Exception:
+        pass
     raw = os.environ.get("HERMES_HOME")
     if raw:
         return Path(raw).expanduser().resolve()

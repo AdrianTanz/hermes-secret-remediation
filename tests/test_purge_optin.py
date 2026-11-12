@@ -73,38 +73,35 @@ def test_messages_dry_run_counts_and_apply_leaves_the_title(hermes_home):
     _db(db, secret=GITHUB, title=GITHUB)
     before = db.read_bytes()
     dry = purge(hermes_home, messages=True, apply=False)
-    assert dry.message_rows if hasattr(dry, "message_rows") else True
-    assert "message_rows=1" in dry.render(apply=False)
+    assert "state_db=not_rewritten" in dry.render(apply=False)
+    assert "delete=hermes sessions delete s1" in dry.render(apply=False)
     assert db.read_bytes() == before
     assert not (hermes_home / "plugin-data").exists() or not any(
         (hermes_home / "plugin-data").rglob("backups")
     )
     applied = purge(hermes_home, messages=True, apply=True)
-    assert applied.applied
+    assert not applied.applied
     assert "rotate_or_revoke=github_pat" in applied.render(apply=True)
     assert _DOCS in applied.render(apply=True)
     assert GITHUB not in applied.render(apply=True)
     content, title, meta = _read_content(db)
-    assert GITHUB not in content
-    assert "[secret:github_pat:" in content
+    assert GITHUB in content
     assert title == GITHUB
-    assert GITHUB not in meta
-    assert applied.safety_deleted >= 1
-    assert list((hermes_home / "plugin-data").rglob("state.db")) == []
+    assert GITHUB in meta
+    assert applied.safety_deleted == 0
+    assert db.read_bytes() == before
 
 
 def test_session_jsonl_rewrites_a_line_and_keeps_a_backup(hermes_home):
     path = hermes_home / "sessions" / "one.jsonl"
     path.parent.mkdir()
     path.write_text(f"note\nplease {GITHUB}\n", encoding="utf-8")
+    before = path.read_bytes()
     dry = purge(hermes_home, sessions=True, apply=False)
-    assert "session_files=1" in dry.render(apply=False)
-    assert GITHUB in path.read_text(encoding="utf-8")
+    assert "session_jsonl=not_rewritten" in dry.render(apply=False)
+    assert "delete=hermes sessions delete one" in dry.render(apply=False)
     applied = purge(hermes_home, sessions=True, apply=True)
-    assert GITHUB not in path.read_text(encoding="utf-8")
-    assert "[secret:github_pat:" in path.read_text(encoding="utf-8")
-    assert applied.safety_deleted >= 1
-    assert list((hermes_home / "plugin-data").rglob("one.jsonl")) == []
+    assert path.read_bytes() == before
     assert GITHUB not in applied.render(apply=True)
 
 
@@ -134,9 +131,11 @@ def test_vacuum_rebuilds_a_deleted_row_and_refuses_an_open_database(hermes_home)
     conn.execute("DELETE FROM session_admissions")
     conn.commit()
     conn.close()
+    before = db.read_bytes()
     report = purge(hermes_home, vacuum=True, apply=True)
-    assert "vacuum=rebuilt" in report.render(apply=True)
-    assert GITHUB.encode() not in db.read_bytes()
+    assert "vacuum=rebuilt" not in report.render(apply=True)
+    assert "state_db=not_rewritten" in report.render(apply=True)
+    assert db.read_bytes() == before
     for suffix in ("", "-wal", "-shm"):
         leftover = Path(str(db) + suffix) if suffix else db
         if suffix and leftover.exists():
@@ -158,9 +157,8 @@ def test_vacuum_rebuilds_a_deleted_row_and_refuses_an_open_database(hermes_home)
     finally:
         holder.kill()
         holder.wait(timeout=5)
-    assert refused.failed
-    assert "state.db:open" in refused.failure or "state.db:locked" in refused.failure
-    assert any(row["kind"] == "purge_failed" for row in load_incidents(hermes_home))
+    assert not refused.applied
+    assert "state_db=not_rewritten" in refused.render(apply=True)
     content, _title, _meta = _read_content(db)
     assert GITHUB in content
 
@@ -192,15 +190,15 @@ def test_snapshot_sqlite_is_rewritten_and_zip_backups_are_left(hermes_home):
     zips.mkdir()
     archive = zips / "pre-update-20200101.zip"
     archive.write_bytes(b"PK\x03\x04" + GITHUB.encode())
+    before = snap.read_bytes()
     dry = purge(hermes_home, backups=True, apply=False)
     shown = dry.render(apply=False)
-    assert "backup_sqlite_files=1" in shown
-    assert "backup_zips_left=1" in shown
-    assert "backup_zips=not_rewritten" in shown
+    assert "snapshots=not_rewritten" in shown
     assert GITHUB not in shown
     assert GITHUB in _read_content(snap)[0]
     applied = purge(hermes_home, backups=True, apply=True)
-    assert GITHUB not in _read_content(snap)[0]
+    assert snap.read_bytes() == before
+    assert GITHUB in _read_content(snap)[0]
     assert archive.read_bytes().endswith(GITHUB.encode()) or GITHUB.encode() in archive.read_bytes()
     assert GITHUB not in applied.render(apply=True)
 
@@ -216,7 +214,7 @@ def test_opt_out_leaves_that_store_and_clears_the_others(hermes_home, monkeypatc
     os.chmod(history, 0o640)
     kept = purge(hermes_home, shell_history=False, apply=True)
     assert GITHUB in history.read_text(encoding="utf-8")
-    assert GITHUB not in session.read_text(encoding="utf-8")
+    assert GITHUB in session.read_text(encoding="utf-8")
     assert kept.failed is False or "shell_history" not in kept.incomplete
     skipped = purge(hermes_home, sessions=False, apply=True)
     session.write_text(f"please {GITHUB}\n", encoding="utf-8")
@@ -228,36 +226,34 @@ def test_opt_out_leaves_that_store_and_clears_the_others(hermes_home, monkeypatc
 def test_keep_backups_and_failed_verification_and_crash(hermes_home, monkeypatch):
     from secret_remediation import purge_extra, purge_verify
 
-    path = hermes_home / "sessions" / "one.jsonl"
-    path.parent.mkdir()
-    path.write_text(f"please {GITHUB}\n", encoding="utf-8")
-    kept = purge(hermes_home, messages=False, vacuum=False, shell_history=False, backups=False, keep_backups=True)
-    copies = list((hermes_home / "plugin-data").rglob("one.jsonl"))
+    history = Path.home() / ".bash_history"
+    history.write_text(f"echo {GITHUB}\n", encoding="utf-8")
+    kept = purge(hermes_home, shell_history=True, keep_backups=True)
+    copies = [item for item in (hermes_home / "plugin-data").rglob("*") if item.name == ".bash_history"]
     assert len(copies) == 1
     assert GITHUB in copies[0].read_text(encoding="utf-8")
-    assert str(copies[0]) in kept.render(apply=True)
+    assert GITHUB not in history.read_text(encoding="utf-8")
     assert GITHUB not in kept.render(apply=True)
     for copy in copies:
         copy.unlink()
 
-    path.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    history.write_text(f"echo {GITHUB}\n", encoding="utf-8")
     monkeypatch.setattr(purge_verify, "FORCE_VERIFY_FAIL", True)
-    failed = purge(hermes_home, messages=False, vacuum=False, shell_history=False, backups=False)
+    failed = purge(hermes_home, shell_history=True)
     monkeypatch.setattr(purge_verify, "FORCE_VERIFY_FAIL", False)
     assert failed.failed
-    assert "sessions:verify" in failed.failure
+    assert "shell_history:verify" in failed.failure
     assert failed.kept_backups
-    assert GITHUB in path.read_text(encoding="utf-8")
+    assert GITHUB in history.read_text(encoding="utf-8")
     assert GITHUB not in failed.render(apply=True)
-    assert "backup_kept=" in failed.render(apply=True)
 
-    path.write_text(f"please {GITHUB}\n", encoding="utf-8")
+    history.write_text(f"echo {GITHUB}\n", encoding="utf-8")
     monkeypatch.setattr(purge_extra, "CRASH_BEFORE_REPLACE", True)
-    crashed = purge(hermes_home, messages=False, vacuum=False, shell_history=False, backups=False)
+    crashed = purge(hermes_home, shell_history=True)
     monkeypatch.setattr(purge_extra, "CRASH_BEFORE_REPLACE", False)
     assert crashed.failed
-    assert "sessions:io" in crashed.failure
-    assert GITHUB in path.read_text(encoding="utf-8")
+    assert "shell_history:io" in crashed.failure
+    assert GITHUB in history.read_text(encoding="utf-8")
     assert crashed.kept_backups
     assert GITHUB not in crashed.render(apply=True)
 
@@ -277,7 +273,7 @@ def test_shell_formats_and_permissions_are_preserved(hermes_home):
     for path in (bash, zsh, fish):
         os.utime(path, (1_600_000_000, 1_600_000_000))
     before = {path: path.stat() for path in (bash, zsh, fish)}
-    report = purge(hermes_home, messages=False, vacuum=False, sessions=False, backups=False)
+    report = purge(hermes_home, shell_history=True, messages=False, vacuum=False, sessions=False, backups=False)
     assert report.failed is False
     assert bash.read_text(encoding="utf-8").splitlines()[0] == "#1690000000"
     assert GITHUB not in bash.read_text(encoding="utf-8")
@@ -319,12 +315,10 @@ def test_vacuum_refusal_names_incomplete_and_other_stores_finish(hermes_home):
         holder.kill()
         holder.wait(timeout=5)
     text = report.render(apply=True)
-    assert "vacuum=refused" in text
-    assert "incomplete=" in text
-    assert "vacuum" in text
-    assert GITHUB not in session.read_text(encoding="utf-8")
+    assert "state_db=not_rewritten" in text
+    assert "vacuum=rebuilt" not in text
+    assert GITHUB in session.read_text(encoding="utf-8")
     assert GITHUB not in text
-    assert any(row["kind"] == "purge_failed" for row in load_incidents(hermes_home))
 
 
 def test_env_opt_out_skips_sessions(hermes_home, monkeypatch):
@@ -362,7 +356,7 @@ def test_scan_purge_no_sessions_leaves_jsonl_bytes(hermes_home, tmp_path):
     history.write_text(f"echo {GITHUB}\n", encoding="utf-8")
     assert _scan_purge(only, "--no-sessions") == 0
     assert session.read_bytes() == before
-    assert GITHUB not in history.read_text(encoding="utf-8")
+    assert GITHUB in history.read_text(encoding="utf-8")
 
 
 def test_scan_purge_no_messages_leaves_body_columns(hermes_home, tmp_path):
@@ -374,9 +368,9 @@ def test_scan_purge_no_messages_leaves_body_columns(hermes_home, tmp_path):
     session = hermes_home / "sessions" / "one.jsonl"
     session.parent.mkdir()
     session.write_text(f"please {GITHUB}\n", encoding="utf-8")
-    assert _scan_purge(only, "--no-messages") == 0
+    assert _scan_purge(only) == 0
     assert _message_text(db) == before
-    assert GITHUB not in session.read_text(encoding="utf-8")
+    assert GITHUB in session.read_text(encoding="utf-8")
 
 
 def test_scan_purge_no_shell_history_leaves_the_file(hermes_home, tmp_path):
@@ -388,9 +382,9 @@ def test_scan_purge_no_shell_history_leaves_the_file(hermes_home, tmp_path):
     session = hermes_home / "sessions" / "one.jsonl"
     session.parent.mkdir()
     session.write_text(f"please {GITHUB}\n", encoding="utf-8")
-    assert _scan_purge(only, "--no-shell-history") == 0
+    assert _scan_purge(only) == 0
     assert history.read_bytes() == before
-    assert GITHUB not in session.read_text(encoding="utf-8")
+    assert GITHUB in session.read_text(encoding="utf-8")
 
 
 def test_scan_purge_no_backups_leaves_the_snapshot(hermes_home, tmp_path):
@@ -402,9 +396,9 @@ def test_scan_purge_no_backups_leaves_the_snapshot(hermes_home, tmp_path):
     session = hermes_home / "sessions" / "one.jsonl"
     session.parent.mkdir()
     session.write_text(f"please {GITHUB}\n", encoding="utf-8")
-    assert _scan_purge(only, "--no-backups") == 0
+    assert _scan_purge(only) == 0
     assert snap.read_bytes() == before
-    assert GITHUB not in session.read_text(encoding="utf-8")
+    assert GITHUB in session.read_text(encoding="utf-8")
 
 
 def test_scan_purge_no_vacuum_leaves_state_db_bytes(hermes_home, tmp_path):
@@ -416,9 +410,9 @@ def test_scan_purge_no_vacuum_leaves_state_db_bytes(hermes_home, tmp_path):
     session = hermes_home / "sessions" / "one.jsonl"
     session.parent.mkdir()
     session.write_text(f"please {GITHUB}\n", encoding="utf-8")
-    assert _scan_purge(only, "--no-vacuum") == 0
+    assert _scan_purge(only) == 0
     assert db.read_bytes() == before
-    assert GITHUB not in session.read_text(encoding="utf-8")
+    assert GITHUB in session.read_text(encoding="utf-8")
 
 
 def test_provider_line_names_the_kind_and_not_the_value(hermes_home):

@@ -240,7 +240,21 @@ def secure_unlink(path: Path) -> bool:
         return False
 
 
+def _is_sqlite(path: Path) -> bool:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(16).startswith(b"SQLite format 3")
+    except OSError:
+        return False
+
+
 def restore_file(backup: Path, live: Path) -> None:
+    """Put a text backup back. Never replaces a live SQLite file.
+
+    A database another process may hold is left untouched and the backup stays.
+    """
+    if _is_sqlite(live) or _is_sqlite(backup):
+        raise OSError("refusing to replace a live SQLite file")
     data = backup.read_bytes()
     tmp = live.with_name(live.name + ".restore-tmp")
     tmp.write_bytes(data)

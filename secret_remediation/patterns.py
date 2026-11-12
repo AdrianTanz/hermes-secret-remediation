@@ -87,7 +87,7 @@ _PATTERNS: tuple[Pattern, ...] = (
     _src("pypi", r"pypi-[A-Za-z0-9_-]{16,}"),
     _src("npm", r"npm_[A-Za-z0-9]{16,}"),
     _src("google_api", r"AIza[0-9A-Za-z_-]{35}"),
-    _src("jwt", r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
+    _src("jwt", r"eyJ[A-Za-z0-9_-]{8,4096}\.[A-Za-z0-9_-]{8,4096}\.[A-Za-z0-9_-]{8,4096}"),
     _src(
         "private_key",
         r"-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[A-Za-z0-9+/=\r\n ]{16,8000}-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----",
