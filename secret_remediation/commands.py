@@ -11,8 +11,8 @@ HELP = """\
 /secret-incident                 list incidents (fingerprints only)
 /secret-incident scan            scan the workspace, logs and session history
 /secret-incident scan <path>     scan one extra path
-/secret-incident purge           count secrets in Hermes state (no writes)
-/secret-incident purge apply     rewrite those stores
+/secret-incident purge           report session ids and hermes sessions delete
+/secret-incident purge apply     same report. It does not write. The only write is CLI --shell-history
 /secret-incident <id>            one incident and rotation advice
 /secret-incident advice          rotation and git-history advice
 /secret-incident advice <kind>

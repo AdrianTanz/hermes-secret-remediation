@@ -10,7 +10,6 @@ from tests.fakes import assert_clean
 @pytest.fixture(autouse=True)
 def fast_purge_retries(monkeypatch):
     monkeypatch.setattr("secret_remediation.purge.RETRY_DELAYS", (0.0, 0.01))
-    monkeypatch.setattr("secret_remediation.purge.VACUUM_RETRY_DELAYS", ())
 
 
 @pytest.fixture(autouse=True)

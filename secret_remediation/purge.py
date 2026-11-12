@@ -10,11 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 import threading
-import time
-from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,8 +22,6 @@ from secret_remediation.redact import redact_text
 # There is no automatic pass. ``hermes secret-remediation purge`` only reports
 # Hermes-owned stores unless ``--shell-history`` is passed.
 RETRY_DELAYS = (0.0, 0.05, 0.15, 0.40, 0.90)
-# Tried after the short pass when VACUUM was refused because Hermes still holds state.db.
-VACUUM_RETRY_DELAYS = (2.0, 5.0, 15.0)
 
 _pending_lock = threading.Lock()
 _pending: list[threading.Thread] = []
@@ -220,63 +215,6 @@ def flush_purges(timeout: float = 5.0) -> None:
         thread.join(timeout)
 
 
-def _schedule_vacuum_retry(home: Path) -> None:
-    if not VACUUM_RETRY_DELAYS:
-        return
-
-    def later() -> None:
-        from secret_remediation.purge_extra import _foreign_db_open
-
-        for delay in VACUUM_RETRY_DELAYS:
-            time.sleep(delay)
-            path = state_db_path(home)
-            if not path.is_file() or _foreign_db_open(path):
-                continue
-            purge(
-                home, apply=True, timeout=2.0, schedule_vacuum=False,
-                sessions=False, messages=False, shell_history=False, backups=False, vacuum=True,
-            )
-            return
-
-    thread = threading.Thread(target=later, name="secret-remediation-vacuum", daemon=True)
-    with _pending_lock:
-        _pending.append(thread)
-    thread.start()
-
-
-def _purge_worker(home: Path) -> None:
-    failure = ""
-    try:
-        for delay in RETRY_DELAYS:
-            if delay:
-                time.sleep(delay)
-            report = purge(home, apply=True, timeout=1.0)
-            if report.failed:
-                failure = report.failure or "purge:error"
-                continue
-            failure = ""
-    except Exception:
-        failure = "purge:error"
-    if failure:
-        record_status("purge_failed", failure, home=home)
-
-
-def _retryable(report: PurgeReport) -> bool:
-    return any(code.endswith(":locked") or code.endswith(":busy") for code in report.codes)
-
-
-def _needs_database(report: PurgeReport) -> bool:
-    if report.withheld_rows or report.admission_rows:
-        return True
-    return any(code.startswith("state.db:") for code in report.codes)
-
-
-def _needs_ledger(report: PurgeReport) -> bool:
-    if report.ledger_entries:
-        return True
-    return any(code.startswith("spawn-ledger.json:") for code in report.codes)
-
-
 def _run(
     home: Path,
     *,
@@ -285,12 +223,13 @@ def _run(
     database: bool = True,
     ledgers: bool = True,
 ) -> PurgeReport:
+    del write
     report = PurgeReport()
     if database:
-        _scrub_database(state_db_path(home), report, timeout=timeout, write=write)
+        _scrub_database(state_db_path(home), report, timeout=timeout)
     if ledgers:
         for path in ledger_paths(home):
-            _scrub_ledger(path, report, timeout=timeout, write=write)
+            _scrub_ledger(path, report, timeout=timeout)
     return report
 
 
@@ -305,50 +244,23 @@ def _failure_code(exc: sqlite3.Error) -> str:
     return "state.db:sqlite"
 
 
-def _scrub_database(path: Path, report: PurgeReport, *, timeout: float, write: bool) -> None:
-    del write
-    write = False
+def _scrub_database(path: Path, report: PurgeReport, *, timeout: float) -> None:
+    """Read session rows. The database is opened read-only and never updated."""
     if not path.is_file():
         return
-    mode = "ro"
     conn: sqlite3.Connection | None = None
     try:
-        conn = sqlite3.connect(_sqlite_uri(path, mode), timeout=timeout, isolation_level=None)
+        conn = sqlite3.connect(_sqlite_uri(path, "ro"), timeout=timeout, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute(f"PRAGMA busy_timeout={max(0, int(timeout * 1000))}")
-        conn.execute("PRAGMA foreign_keys=ON")
-        if write:
-            conn.execute("BEGIN IMMEDIATE")
-        _scrub_messages(conn, report, write=write)
-        _scrub_admissions(conn, report, write=write)
+        _scrub_messages(conn, report)
+        _scrub_admissions(conn, report)
         _collect_db_sessions(conn, report)
-        if write:
-            if report.withheld_rows or report.admission_rows:
-                conn.execute("COMMIT")
-                report.applied = True
-                _checkpoint(conn)
-            else:
-                conn.execute("ROLLBACK")
     except sqlite3.Error as exc:
-        if conn is not None and write:
-            try:
-                conn.execute("ROLLBACK")
-            except sqlite3.Error:
-                pass
         report.note(_failure_code(exc))
-        report.applied = False
     finally:
         if conn is not None:
             conn.close()
-
-
-def _checkpoint(conn: sqlite3.Connection) -> None:
-    try:
-        mode = conn.execute("PRAGMA journal_mode").fetchone()
-        if mode and str(mode[0]).lower() == "wal":
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    except sqlite3.Error:
-        return
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -361,7 +273,7 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def _scrub_messages(conn: sqlite3.Connection, report: PurgeReport, *, write: bool) -> None:
+def _scrub_messages(conn: sqlite3.Connection, report: PurgeReport) -> None:
     columns = _table_columns(conn, "messages")
     if not columns:
         return
@@ -388,28 +300,15 @@ def _scrub_messages(conn: sqlite3.Connection, report: PurgeReport, *, write: boo
             if redact_text(raw)[1]:
                 report.note("state.db:display_metadata_other")
             continue
-        masked, hits = redact_text(prompt)
+        _masked, hits = redact_text(prompt)
         if not hits:
-            continue
-        meta["withheld_prompt"] = masked
-        try:
-            new_raw = json.dumps(meta, ensure_ascii=False, separators=(",", ":"))
-        except (TypeError, ValueError):
-            report.note("state.db:invalid_display_metadata")
             continue
         report.withheld_rows += 1
         report.replacements += len(hits)
         report.kinds.update(hit.kind for hit in hits)
-        if write:
-            changed = conn.execute(
-                "UPDATE messages SET display_metadata = ? WHERE rowid = ? AND display_metadata = ?",
-                (new_raw, row["rid"], raw),
-            ).rowcount
-            if changed != 1:
-                raise sqlite3.OperationalError("state.db conflict")
 
 
-def _scrub_admissions(conn: sqlite3.Connection, report: PurgeReport, *, write: bool) -> None:
+def _scrub_admissions(conn: sqlite3.Connection, report: PurgeReport) -> None:
     columns = _table_columns(conn, "session_admissions")
     if "payload_json" not in columns:
         return
@@ -425,43 +324,12 @@ def _scrub_admissions(conn: sqlite3.Connection, report: PurgeReport, *, write: b
         raw = row["payload_json"]
         if not isinstance(raw, str):
             continue
-        masked, hits = redact_text(raw)
+        _masked, hits = redact_text(raw)
         if not hits:
             continue
-        try:
-            parsed = json.loads(masked)
-        except json.JSONDecodeError:
-            report.note("state.db:invalid_admission")
-            continue
-        if not isinstance(parsed, dict):
-            report.note("state.db:invalid_admission")
-            continue
-        digest = None
-        target = row["target_session_id"] if "target_session_id" in row.keys() else None
-        intent = row["intent"] if "intent" in row.keys() else None
-        if isinstance(target, str) and isinstance(intent, str) and "payload_digest" in row.keys():
-            try:
-                digest = admission_digest(target, parsed, intent)
-            except (TypeError, ValueError):
-                digest = None
         report.admission_rows += 1
         report.replacements += len(hits)
         report.kinds.update(hit.kind for hit in hits)
-        if not write:
-            continue
-        if digest is None:
-            changed = conn.execute(
-                "UPDATE session_admissions SET payload_json = ? WHERE rowid = ? AND payload_json = ?",
-                (masked, row["rid"], raw),
-            ).rowcount
-        else:
-            changed = conn.execute(
-                "UPDATE session_admissions SET payload_json = ?, payload_digest = ? "
-                "WHERE rowid = ? AND payload_json = ?",
-                (masked, digest, row["rid"], raw),
-            ).rowcount
-        if changed != 1:
-            raise sqlite3.OperationalError("state.db conflict")
 
 
 def _read_ledger(path: Path) -> list | None:
@@ -475,9 +343,9 @@ def _read_ledger(path: Path) -> list | None:
     return parsed
 
 
-def _scrub_ledger(path: Path, report: PurgeReport, *, timeout: float, write: bool) -> None:
+def _scrub_ledger(path: Path, report: PurgeReport, *, timeout: float) -> None:
     """Count ledger hits. The file is not locked and not written."""
-    del timeout, write
+    del timeout
     if not path.is_file():
         return
     parsed = _read_ledger(path)
@@ -567,36 +435,3 @@ def _redact_ledger_entries(entries: list, report: PurgeReport) -> bool:
                 report.replacements += hits_here
                 changed = True
     return changed
-
-
-@contextmanager
-def _ledger_lock(path: Path, *, timeout: float, exclusive: bool):
-    import fcntl
-
-    lock_path = path.with_name(path.name + ".lock")
-    flags = os.O_RDWR | os.O_CREAT
-    fd = os.open(lock_path, flags, 0o600)
-    try:
-        os.chmod(lock_path, 0o600)
-        deadline = time.monotonic() + timeout
-        mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-        while True:
-            try:
-                fcntl.flock(fd, mode | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("spawn-ledger.json:locked") from None
-                time.sleep(0.02)
-        yield
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
-
-
-def _atomic_json(path: Path, payload: list) -> None:
-    """spawn-ledger.json is Hermes-owned and is never replaced."""
-    del path, payload
-    raise OSError("refusing to write spawn-ledger.json")

@@ -6,7 +6,6 @@ Shell history runs only when the caller passes it. ``state.db``,
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import sqlite3
@@ -18,11 +17,8 @@ from secret_remediation.paths import plugin_data_dir
 from secret_remediation.purge import (
     PurgeReport,
     _sqlite_uri,
-    _table_columns,
-    state_db_path,
 )
 from secret_remediation.purge_verify import (
-    database_rewrite_ok,
     restore_file,
     secure_unlink,
     text_rewrite_ok,
@@ -31,9 +27,6 @@ from secret_remediation.redact import redact_text
 
 # Tests set this so a rewrite raises after the safety copy exists and before replace.
 CRASH_BEFORE_REPLACE = False
-
-_BODY_COLUMNS = ("content", "api_content", "tool_calls")
-
 
 def scrub_shell_history(home: Path, report: PurgeReport, *, apply: bool, keep_backups: bool) -> None:
     """Rewrite bash, zsh, and fish history. Nothing under Hermes is touched."""
@@ -154,12 +147,6 @@ def _finish_text_copy(
     return True
 
 
-def _sessions(home: Path, report: PurgeReport, *, apply: bool, keep_backups: bool) -> None:
-    """Session JSONL is Hermes history. Report it elsewhere; do not rewrite it."""
-    del home, apply, keep_backups
-    report.extra_lines.append("session_jsonl=not_rewritten")
-
-
 def _rewrite_lines(
     path: Path,
     report: PurgeReport,
@@ -235,251 +222,6 @@ def _rewrite_lines(
         return False
     report.applied = True
     return True
-
-
-def _message_columns(
-    path: Path, report: PurgeReport, *, apply: bool, timeout: float, home: Path, keep_backups: bool,
-) -> None:
-    rows = _rewrite_message_db(
-        path, report, apply=apply, timeout=timeout, home=home, label="messages",
-        include_withheld=False, include_admissions=False, keep_backups=keep_backups,
-    )
-    report.extra_lines.append(f"message_rows={rows}")
-
-
-def _rewrite_message_db(
-    path: Path,
-    report: PurgeReport,
-    *,
-    apply: bool,
-    timeout: float,
-    home: Path,
-    label: str,
-    include_withheld: bool,
-    include_admissions: bool,
-    keep_backups: bool,
-) -> int:
-    del path, apply, timeout, home, label, include_withheld, include_admissions, keep_backups
-    report.extra_lines.append("state_db=not_rewritten")
-    return 0
-
-
-def _plan_message_rows(path: Path, timeout: float, *, include_withheld: bool) -> list[dict]:
-    conn = sqlite3.connect(_sqlite_uri(path, "ro"), timeout=timeout, isolation_level=None)
-    try:
-        conn.row_factory = sqlite3.Row
-        columns = _table_columns(conn, "messages")
-        selected = ["rowid AS rid"]
-        selected.extend(name for name in (*_BODY_COLUMNS, "display_metadata") if name in columns)
-        if len(selected) == 1:
-            return []
-        planned = []
-        for row in conn.execute(f"SELECT {', '.join(selected)} FROM messages"):
-            changed, hits, unsafe = _row_updates(row, columns, include_withheld=include_withheld)
-            if unsafe:
-                planned.append({"unsafe": True, "rid": row["rid"], "changes": {}, "hits": []})
-            elif changed:
-                planned.append({
-                    "unsafe": False,
-                    "rid": row["rid"],
-                    "changes": changed,
-                    "originals": {name: row[name] for name in changed},
-                    "hits": hits,
-                })
-        return planned
-    finally:
-        conn.close()
-
-
-def _plan_admissions(path: Path, timeout: float) -> list[dict]:
-    from secret_remediation.purge import admission_digest
-
-    conn = sqlite3.connect(_sqlite_uri(path, "ro"), timeout=timeout, isolation_level=None)
-    try:
-        conn.row_factory = sqlite3.Row
-        columns = _table_columns(conn, "session_admissions")
-        if "payload_json" not in columns:
-            return []
-        select = ["rowid AS rid", "payload_json"]
-        for name in ("target_session_id", "intent", "payload_digest"):
-            if name in columns:
-                select.append(name)
-        planned = []
-        for row in conn.execute(f"SELECT {', '.join(select)} FROM session_admissions"):
-            raw = row["payload_json"]
-            if not isinstance(raw, str):
-                continue
-            masked, hits = redact_text(raw)
-            if not hits:
-                continue
-            try:
-                parsed = json.loads(masked)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            digest = None
-            target = row["target_session_id"] if "target_session_id" in row.keys() else None
-            intent = row["intent"] if "intent" in row.keys() else None
-            if isinstance(target, str) and isinstance(intent, str) and "payload_digest" in row.keys():
-                digest = admission_digest(target, parsed, intent)
-            planned.append({"rid": row["rid"], "payload": masked, "original": raw, "digest": digest, "hits": hits})
-        return planned
-    finally:
-        conn.close()
-
-
-def _apply_plans(path, safe, admissions, timeout, report, home, label) -> bool:
-    """Hermes databases are not written. The backup is left in place."""
-    del path, safe, admissions, timeout, home, label
-    return False
-
-
-def _row_updates(row: sqlite3.Row, columns: set[str], *, include_withheld: bool) -> tuple[dict[str, str], list, bool]:
-    changed: dict[str, str] = {}
-    hits = []
-    keys = row.keys()
-    unsafe = False
-    for name in _BODY_COLUMNS:
-        if name not in columns or name not in keys:
-            continue
-        raw = row[name]
-        if not isinstance(raw, str) or not raw:
-            continue
-        masked, found = redact_text(raw)
-        if not found:
-            continue
-        if name == "tool_calls":
-            try:
-                json.loads(masked)
-            except json.JSONDecodeError:
-                unsafe = True
-                continue
-        changed[name] = masked
-        hits.extend(found)
-    if "display_metadata" in columns and "display_metadata" in keys:
-        raw = row["display_metadata"]
-        if isinstance(raw, str) and raw:
-            updated, found = _redact_metadata(raw, include_withheld=include_withheld)
-            if found and updated is not None:
-                changed["display_metadata"] = updated
-                hits.extend(found)
-    if unsafe:
-        return {}, [], True
-    return changed, hits, False
-
-
-def _redact_metadata(raw: str, *, include_withheld: bool) -> tuple[str | None, list]:
-    import json
-
-    try:
-        meta = json.loads(raw)
-    except json.JSONDecodeError:
-        return None, []
-    if not isinstance(meta, dict):
-        return None, []
-    hits = []
-
-    def walk(value, *, skip: bool = False):
-        if isinstance(value, str):
-            if skip:
-                return value
-            masked, found = redact_text(value)
-            hits.extend(found)
-            return masked if found else value
-        if isinstance(value, list):
-            return [walk(item) for item in value]
-        if isinstance(value, dict):
-            return {key: walk(item) for key, item in value.items()}
-        return value
-
-    rewritten = {}
-    for key, value in meta.items():
-        rewritten[key] = walk(value, skip=(key == "withheld_prompt" and not include_withheld))
-    if not hits:
-        return None, []
-    try:
-        return json.dumps(rewritten, ensure_ascii=False, separators=(",", ":")), hits
-    except (TypeError, ValueError):
-        return None, []
-
-
-def _hermes_backups(home: Path, report: PurgeReport, *, apply: bool, timeout: float, keep_backups: bool) -> None:
-    """Snapshot databases are Hermes-owned. They are not rewritten."""
-    del home, apply, timeout, keep_backups
-    report.extra_lines.append("snapshots=not_rewritten")
-    return
-
-
-def _snapshot_databases(home: Path) -> list[Path]:
-    found: list[Path] = []
-    snaps = home / "state-snapshots"
-    if snaps.is_dir():
-        for path in sorted(snaps.rglob("state.db")):
-            if path.is_symlink():
-                continue
-            try:
-                if path.resolve().is_relative_to(snaps.resolve()):
-                    found.append(path)
-            except OSError:
-                continue
-    for path in sorted(home.glob("state.db.pre-update-emergency-*.bak")):
-        if path.is_file() and not path.is_symlink():
-            found.append(path)
-    return found
-
-
-def _backup_zips(home: Path) -> list[Path]:
-    directory = home / "backups"
-    if not directory.is_dir():
-        return []
-    found = []
-    for path in sorted(directory.iterdir()):
-        if not path.is_file() or path.is_symlink():
-            continue
-        name = path.name
-        if name.startswith(("pre-update-", "pre-migration-")) and name.endswith(".zip"):
-            found.append(path)
-    return found
-
-
-def _vacuum(path: Path, report: PurgeReport, *, apply: bool, home: Path, keep_backups: bool) -> None:
-    """state.db is Hermes-owned. VACUUM is not run."""
-    del path, apply, home, keep_backups
-    report.extra_lines.append("vacuum=not_rewritten")
-    return
-
-
-def _foreign_db_open(path: Path) -> bool | None:
-    """True when a process other than this one has the db or its WAL open.
-
-    None when ``/proc`` cannot answer. Callers refuse the vacuum in that case.
-    """
-    proc = Path("/proc")
-    if not proc.is_dir():
-        return None
-    targets = {path.resolve(), Path(str(path.resolve()) + "-wal"), Path(str(path.resolve()) + "-shm")}
-    me = os.getpid()
-    try:
-        entries = list(proc.iterdir())
-    except OSError:
-        return None
-    for entry in entries:
-        if not entry.name.isdigit() or int(entry.name) == me:
-            continue
-        fd_dir = entry / "fd"
-        try:
-            fds = list(fd_dir.iterdir())
-        except OSError:
-            continue
-        for fd in fds:
-            try:
-                linked = Path(os.readlink(fd))
-            except OSError:
-                continue
-            if linked in targets:
-                return True
-    return False
 
 
 def _shell_history(home: Path, report: PurgeReport, *, apply: bool, keep_backups: bool) -> None:

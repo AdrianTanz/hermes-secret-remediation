@@ -46,7 +46,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
     scan.add_argument("--quiet", action="store_true", help="Print only new fingerprints. Empty when none.")
     scan.add_argument("--json", action="store_true", dest="as_json")
     scan.add_argument("--purge", action="store_true", help="Also report Hermes-owned session ids. Does not write them.")
-    scan.add_argument("--apply", action="store_true", help="With --shell-history, write that history. Hermes stores stay untouched.")
+    scan.add_argument("--apply", action="store_true", help="Accepted for compatibility. Does not rewrite Hermes stores. Shell history still needs --shell-history.")
     scan.add_argument("--dry-run", action="store_true", help="With --purge, print counts only.")
     scan.add_argument("--keep-backups", action="store_true", help="With --shell-history, keep the safety copy.")
 
@@ -71,7 +71,7 @@ def setup_cli(parser: argparse.ArgumentParser) -> None:
         ),
     )
     purge_cmd.add_argument("--dry-run", action="store_true", help="Print counts only. Do not write.")
-    purge_cmd.add_argument("--apply", action="store_true", help="With --shell-history, write that history. Hermes stores stay untouched.")
+    purge_cmd.add_argument("--apply", action="store_true", help="Accepted for compatibility. Does not rewrite Hermes stores. The only write is --shell-history.")
     purge_cmd.add_argument("--keep-backups", action="store_true", help="With --shell-history, keep the safety copy.")
     _add_shell_history_flag(purge_cmd)
 

@@ -6,7 +6,7 @@ It is not another masking pack. Marketplace **secret-guard** takes keys in and r
 
 Author: AdrianTanz.
 
-Canonical repo, private until you approve a submission: [AdrianTanz/hermes-secret-remediation](https://github.com/AdrianTanz/hermes-secret-remediation).
+Canonical repo: [AdrianTanz/hermes-secret-remediation](https://github.com/AdrianTanz/hermes-secret-remediation).
 
 ## What it does
 
@@ -148,7 +148,7 @@ Fixtures are synthetic (`ghp_FAKESECRET_testonly_aaaabbbbccccdddd`, `sk-test_fak
 
 ## Non-goals
 
-No git history rewrite, no `git filter-repo` or BFG execution, no push, no revoke API, no Discord or Slack deletion, no gitleaks or trufflehog, no binary, no skin of secret-guard or redaction-pack. The local purge is only the three stores in Known limitations.
+No git history rewrite, no `git filter-repo` or BFG execution, no push, no revoke API, no Discord or Slack deletion, no gitleaks or trufflehog, no binary, no skin of secret-guard or redaction-pack. Purge only reports session ids and `hermes sessions delete`. The only write is the opt-in `--shell-history`.
 
 ## Licence
 

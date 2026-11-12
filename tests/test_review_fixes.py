@@ -110,7 +110,12 @@ def test_machine_wide_ledger_is_not_a_target(tmp_path):
 
 
 def test_home_uses_get_hermes_home(monkeypatch, tmp_path):
-    monkeypatch.setattr("hermes_constants.get_hermes_home", lambda: tmp_path)
+    import sys
+    import types
+
+    fake = types.ModuleType("hermes_constants")
+    fake.get_hermes_home = lambda: tmp_path
+    monkeypatch.setitem(sys.modules, "hermes_constants", fake)
     assert hermes_home() == tmp_path.resolve()
 
 

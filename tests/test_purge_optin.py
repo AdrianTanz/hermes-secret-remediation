@@ -4,9 +4,6 @@ import argparse
 import json
 import os
 import sqlite3
-import subprocess
-import sys
-import time
 from pathlib import Path
 
 from secret_remediation.cli import handle_cli, setup_cli
@@ -121,46 +118,6 @@ def test_unreadable_session_fails_closed(hermes_home):
     assert rows[-1]["kind"] == "purge_failed"
     assert rows[-1]["location"] == "sessions:unreadable"
     assert GITHUB not in json.dumps(rows)
-
-
-def test_vacuum_rebuilds_a_deleted_row_and_refuses_an_open_database(hermes_home):
-    db = hermes_home / "state.db"
-    _db(db, secret=GITHUB)
-    conn = sqlite3.connect(db)
-    conn.execute("DELETE FROM messages")
-    conn.execute("DELETE FROM session_admissions")
-    conn.commit()
-    conn.close()
-    before = db.read_bytes()
-    report = purge(hermes_home, vacuum=True, apply=True)
-    assert "vacuum=rebuilt" not in report.render(apply=True)
-    assert "state_db=not_rewritten" in report.render(apply=True)
-    assert db.read_bytes() == before
-    for suffix in ("", "-wal", "-shm"):
-        leftover = Path(str(db) + suffix) if suffix else db
-        if suffix and leftover.exists():
-            leftover.unlink()
-    if db.exists():
-        db.unlink()
-    _db(db, secret=GITHUB)
-    holder = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); time.sleep(30)",
-            str(db),
-        ]
-    )
-    try:
-        time.sleep(0.3)
-        refused = purge(hermes_home, vacuum=True, apply=True)
-    finally:
-        holder.kill()
-        holder.wait(timeout=5)
-    assert not refused.applied
-    assert "state_db=not_rewritten" in refused.render(apply=True)
-    content, _title, _meta = _read_content(db)
-    assert GITHUB in content
 
 
 def test_shell_history_is_opt_in_and_backed_up(hermes_home, monkeypatch, tmp_path):
@@ -293,32 +250,6 @@ def test_shell_formats_and_permissions_are_preserved(hermes_home):
     shown = report.render(apply=True)
     assert "outside" not in shown or GITHUB not in shown
     assert GITHUB not in shown
-
-
-def test_vacuum_refusal_names_incomplete_and_other_stores_finish(hermes_home):
-    db = hermes_home / "state.db"
-    _db(db, secret=GITHUB)
-    session = hermes_home / "sessions" / "one.jsonl"
-    session.parent.mkdir()
-    session.write_text(f"please {GITHUB}\n", encoding="utf-8")
-    holder = subprocess.Popen(
-        [
-            sys.executable, "-c",
-            "import sqlite3,sys,time; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); time.sleep(30)",
-            str(db),
-        ]
-    )
-    try:
-        time.sleep(0.3)
-        report = purge(hermes_home, shell_history=False, backups=False)
-    finally:
-        holder.kill()
-        holder.wait(timeout=5)
-    text = report.render(apply=True)
-    assert "state_db=not_rewritten" in text
-    assert "vacuum=rebuilt" not in text
-    assert GITHUB in session.read_text(encoding="utf-8")
-    assert GITHUB not in text
 
 
 def test_env_opt_out_skips_sessions(hermes_home, monkeypatch):
